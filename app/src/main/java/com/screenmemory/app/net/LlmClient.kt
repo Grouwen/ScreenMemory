@@ -1,6 +1,7 @@
 package com.screenmemory.app.net
 
 import com.screenmemory.app.Prefs
+import com.screenmemory.app.chat.ChatTurn
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -55,11 +56,17 @@ class LlmClient(private val prefs: Prefs) {
         }
     }
 
+    /**
+     * 发一问。带 [history] 就是追问：把之前几轮以纯文本回放，模型才知道"刚才"指什么。
+     *
+     * @param jpegBase64 这一轮要附的截图；追问时传空列表（画面沿用上一轮，不重复上传）
+     */
     fun ask(
         question: String,
         jpegBase64: List<String>,
         systemPrompt: String,
-        onDelta: (String) -> Unit = {}
+        onDelta: (String) -> Unit = {},
+        history: List<ChatTurn> = emptyList()
     ): String {
         val key = prefs.apiKey.trim()
         if (key.isEmpty()) throw IOException("请先在设置里填写 API Key")
@@ -69,11 +76,13 @@ class LlmClient(private val prefs: Prefs) {
         }
 
         val content = JSONArray()
-        val intro = if (jpegBase64.isEmpty()) {
-            question
-        } else {
-            question + "\n\n（以下是用户最近屏幕中抽取的 " + jpegBase64.size +
-                " 张截图，按时间先后排列，最后一张最接近提问瞬间）"
+        val intro = when {
+            jpegBase64.isNotEmpty() ->
+                question + "\n\n（以下是用户最近屏幕中抽取的 " + jpegBase64.size +
+                    " 张截图，按时间先后排列，最后一张最接近提问瞬间）"
+            history.isNotEmpty() ->
+                question + "\n\n（这是追问，不重复附图：画面和你上一轮看到的是同一批，请沿用上文里的画面信息）"
+            else -> question
         }
         content.put(JSONObject().put("type", "text").put("text", intro))
         for (b64 in jpegBase64) {
@@ -85,7 +94,14 @@ class LlmClient(private val prefs: Prefs) {
 
         val messages = JSONArray()
             .put(JSONObject().put("role", "system").put("content", systemPrompt))
-            .put(JSONObject().put("role", "user").put("content", content))
+        // 历史轮次只回放文字：图片不重复上传，否则每次追问都要多传几 MB
+        for (turn in history) {
+            messages.put(JSONObject().put("role", "user").put("content", turn.question))
+            if (turn.answer.isNotBlank()) {
+                messages.put(JSONObject().put("role", "assistant").put("content", turn.answer))
+            }
+        }
+        messages.put(JSONObject().put("role", "user").put("content", content))
 
         val payload = JSONObject()
             .put("model", prefs.chatModelName())

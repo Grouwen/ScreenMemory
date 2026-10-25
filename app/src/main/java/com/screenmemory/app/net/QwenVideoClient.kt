@@ -1,6 +1,7 @@
 package com.screenmemory.app.net
 
 import com.screenmemory.app.Prefs
+import com.screenmemory.app.chat.ChatTurn
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
@@ -64,17 +65,38 @@ class QwenVideoClient(private val prefs: Prefs) {
         .readTimeout(300, TimeUnit.SECONDS)
         .build()
 
+    /**
+     * 发一问。
+     *
+     * @param video 这一轮要上传的片段；**追问时传 null** —— 不重传视频（一段 20MB），
+     *              模型靠 [history] 里上一轮的回答延续上下文
+     */
     fun ask(
         question: String,
-        video: File,
+        video: File?,
         systemPrompt: String,
         onStatus: (String) -> Unit,
-        onDelta: (String) -> Unit = {}
+        onDelta: (String) -> Unit = {},
+        history: List<ChatTurn> = emptyList()
     ): String {
         val key = prefs.qwenKey().trim()
         if (key.isEmpty()) throw IOException("请先填写百炼（DashScope）API Key")
-        if (!video.exists() || video.length() == 0L) throw IOException("视频文件为空")
+        val useVideo = video != null && video.exists() && video.length() > 0L
+        if (!useVideo && history.isEmpty()) throw IOException("视频文件为空")
         val model = prefs.qwenModel()
+
+        // 已经开始吐字了就不能再降级重试，否则用户会看到两份答案
+        var emitted = false
+        val forward: (String) -> Unit = { delta ->
+            emitted = true
+            onDelta(delta)
+        }
+
+        // 追问：只带文字历史，不重新上传
+        if (!useVideo || video == null) {
+            onStatus("追问中（沿用上一轮的画面）…")
+            return chat(key, null, question, systemPrompt, history, forward)
+        }
 
         onStatus("正在申请上传凭证…")
         val ossUrl = try {
@@ -84,17 +106,10 @@ class QwenVideoClient(private val prefs: Prefs) {
             null.also { lastUploadError = t }
         }
 
-        // 已经开始吐字了就不能再降级重试，否则用户会看到两份答案
-        var emitted = false
-        val forward: (String) -> Unit = { delta ->
-            emitted = true
-            onDelta(delta)
-        }
-
         if (ossUrl != null) {
             onStatus("模型正在看这段视频…")
             try {
-                return chat(key, ossUrl, question, systemPrompt, forward)
+                return chat(key, ossUrl, question, systemPrompt, history, forward)
             } catch (t: Throwable) {
                 if (emitted) throw t
                 lastUploadError = t
@@ -103,7 +118,9 @@ class QwenVideoClient(private val prefs: Prefs) {
 
         if (video.length() < BASE64_MAX_BYTES) {
             onStatus("改用 base64 内联重试…")
-            return chat(key, "data:video/mp4;base64," + base64(video), question, systemPrompt, forward)
+            return chat(
+                key, "data:video/mp4;base64," + base64(video), question, systemPrompt, history, forward
+            )
         }
 
         val reason = lastUploadError?.message?.take(200).orEmpty()
@@ -211,21 +228,36 @@ class QwenVideoClient(private val prefs: Prefs) {
 
     private fun chat(
         key: String,
-        videoUrl: String,
+        videoUrl: String?,
         question: String,
         systemPrompt: String,
+        history: List<ChatTurn>,
         onDelta: (String) -> Unit
     ): String {
+        val intro = if (videoUrl == null && history.isNotEmpty()) {
+            question + "\n\n（这是追问，不再重复上传视频：画面和你上一轮看到的是同一段，请沿用上文里的画面信息）"
+        } else {
+            question
+        }
         val content = JSONArray()
-            .put(JSONObject().put("type", "text").put("text", question))
-            .put(
+            .put(JSONObject().put("type", "text").put("text", intro))
+        if (videoUrl != null) {
+            content.put(
                 JSONObject().put("type", "video_url")
                     .put("video_url", JSONObject().put("url", videoUrl))
                     .put("fps", VIDEO_FPS)
             )
+        }
         val messages = JSONArray()
             .put(JSONObject().put("role", "system").put("content", systemPrompt))
-            .put(JSONObject().put("role", "user").put("content", content))
+        // 历史轮次只回放文字
+        for (turn in history) {
+            messages.put(JSONObject().put("role", "user").put("content", turn.question))
+            if (turn.answer.isNotBlank()) {
+                messages.put(JSONObject().put("role", "assistant").put("content", turn.answer))
+            }
+        }
+        messages.put(JSONObject().put("role", "user").put("content", content))
 
         val payload = JSONObject()
             .put("model", prefs.qwenModel())

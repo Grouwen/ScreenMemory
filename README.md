@@ -14,7 +14,11 @@
 | ② | 点屏幕上悬浮的「问」小球 | **画面在这一刻冻结**（缓冲区不再前进），随后弹出的面板和键盘不会进入录像；弹出面板并提示已冻结 |
 | ③ | **按住**「按住说话」说一句话，松手 | 录音 → 上传转写 → 文字回填到输入框（可修改） |
 | ④ | 点「发送」 | 把最近 30 秒画面抽 8 帧（或整段视频直传）+ 你的问题发给多模态模型，答案**流式**逐字显示 |
-| ⑤ | 答案显示在面板里 | 面板可继续追问，小球可拖动到任意位置 |
+| ⑤ | 继续打字再点「发送」 | **追问**：把之前几轮以纯文本回放给模型，画面沿用第一次那批，不重复上传（省时省钱）；面板上显示完整对话 |
+| ⑥ | 点面板右上「新对话」 | 清空上下文，下一问重新附上当前画面 |
+
+> 每段对话都会存到本机 `filesDir/chat_history.json`（最近 30 段、每段最多 20 轮），
+> 设置页「对话历史」那一行可以查看全文、也可以清空。
 
 ---
 
@@ -198,8 +202,10 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ```
 app/src/main/java/com/screenmemory/app/
-├── MainActivity.kt                  权限流程 + 配置界面
+├── MainActivity.kt                  权限流程 + 配置界面 + 对话历史查看
 ├── Prefs.kt                         配置存取
+├── chat/
+│   └── ChatStore.kt                 多轮对话的本地记录（ChatTurn / Conversation / JSON 落盘）
 ├── service/
 │   └── CaptureService.kt            前台服务：持有 MediaProjection、串联录制/悬浮窗/网络
 ├── capture/
@@ -286,6 +292,24 @@ H.264 不能从任意帧开始解码，所以导出会向前找到最近的一�
 | 面板内连续追问 | 复用同一份冻结帧，几次提问看的是同一段上下文 |
 
 > 已知残留：悬浮球本身（56dp 小圆）无法从录制中排除，会一直出现在画面角落。面板和键盘是干净的，球不遮挡主要内容，暂不做处理（把球设成 `FLAG_SECURE` 在部分机型会让整个录屏变黑，风险更大）。
+
+**⑦.5 追问（多轮对话）与本地历史。**
+面板里的「发送」可以连发很多次，每次都是对**同一批冻结帧**的追问。关键取舍是**媒体只传一次**：
+
+- 首轮：抽帧/视频 + 问题，走原来的链路；
+- 追问：**不重新抽帧、不重新上传**，只用 [LlmClient.ask()](app/src/main/java/com/screenmemory/app/net/LlmClient.kt) /
+  [QwenVideoClient.ask()](app/src/main/java/com/screenmemory/app/net/QwenVideoClient.kt) 的 `history` 参数把前面几轮
+  按 `user` / `assistant` 消息回放（纯文本），并把当前问题附在最后。
+  视频直传模式下追问传 `video = null`，直接跳过「取凭证 + 传 OSS」那 20MB。
+
+为什么这么做：一轮追问如果重传 8 张图（约 3 MB）或整段视频（约 20 MB），延迟和费用都会失控；
+而追问通常是「为什么这么说」「第二步呢」这类，靠文字历史就够了。提示词也分了两套：
+`systemPrompt()` / `videoPrompt()` 用于首轮，`followUpSystemPrompt()` / `videoFollowUpPrompt()` 明确告诉模型
+「这一轮不附图，画面沿用上文」，避免它以为又给了一批新截图。
+
+历史落盘在 [ChatStore.kt](app/src/main/java/com/screenmemory/app/chat/ChatStore.kt)：
+`filesDir/chat_history.json`，一段对话一条记录（id = 冻结时刻），只留最近 30 段、每段 20 轮；
+写盘是「临时文件 + rename」，进程被杀也不会留下半截 JSON。设置页顶部显示「已保存 N 段 / M 轮」，点开能看全文或清空。
 
 **⑧ 流式输出 + Markdown/公式渲染。**
 `stream: true` 后按 SSE 逐行读 `choices[0].delta.content`（`Sse.consume()` 两家共用），刷新做 120ms 节流。

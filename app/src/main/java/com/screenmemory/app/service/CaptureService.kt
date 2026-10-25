@@ -31,11 +31,13 @@ import com.screenmemory.app.audio.UtteranceRecorder
 import com.screenmemory.app.capture.FrameExtractor
 import com.screenmemory.app.capture.MediaProbe
 import com.screenmemory.app.capture.ScreenRingRecorder
+import com.screenmemory.app.chat.ChatStore
+import com.screenmemory.app.chat.ChatTurn
+import com.screenmemory.app.chat.Conversation
 import com.screenmemory.app.net.LlmClient
 import com.screenmemory.app.net.QwenVideoClient
 import com.screenmemory.app.overlay.OverlayController
 import com.screenmemory.app.speech.SpeechTranscriber
-import com.screenmemory.app.util.Preview
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -92,6 +94,12 @@ class CaptureService : Service(), OverlayController.Listener {
 
     /** 本回合本地识别失败过，就暂时全部走云端，避免每次都要失败一次 */
     private var localSpeechFailed = false
+
+    /** 本地对话记录（filesDir/chat_history.json） */
+    private val chatStore by lazy { ChatStore(this) }
+
+    /** 当前这段对话：面板冻结一次画面到关闭之间 */
+    private var conversation: Conversation? = null
 
     private var ready = false
     private var asking = false
@@ -357,18 +365,31 @@ class CaptureService : Service(), OverlayController.Listener {
             overlay?.setStatus("录制还没准备好")
             return
         }
+
+        // 面板冻结一次画面 = 一段对话。首轮附画面，之后都是追问
+        val conv = conversation ?: Conversation(System.currentTimeMillis()).also { conversation = it }
+        val history = conv.turns.toList()
+        val firstTurn = history.isEmpty()
+
         asking = true
         overlay?.setBusy(true)
-        overlay?.setAnswer("")
+        overlay?.setTranscript(history, question, "")
         scope.launch {
             try {
                 overlay?.setWarning("")
-                overlay?.setStatus(
-                    if (rec.isFrozen()) "正在打包「点按钮那一刻」之前的 ${prefs.clipSeconds} 秒…"
-                    else "正在打包最近 ${prefs.clipSeconds} 秒…"
-                )
-                val prepared = withContext(Dispatchers.IO) { prepare(rec) }
-                if (!prepared.ok) throw IllegalStateException(prepared.message)
+
+                // 追问不再打包画面：模型沿用上一轮看到的那批帧，省一次编码+抽帧+上传
+                val prepared: Prepared? = if (firstTurn) {
+                    overlay?.setStatus(
+                        if (rec.isFrozen()) "正在打包「点按钮那一刻」之前的 ${prefs.clipSeconds} 秒…"
+                        else "正在打包最近 ${prefs.clipSeconds} 秒…"
+                    )
+                    val p = withContext(Dispatchers.IO) { prepare(rec) }
+                    if (!p.ok) throw IllegalStateException(p.message)
+                    p
+                } else {
+                    null
+                }
 
                 // 流式输出：先纯文本预览，收尾再整体渲染 Markdown（半截公式不能交给 LaTeX 渲染器）
                 val streamed = StringBuilder()
@@ -378,7 +399,7 @@ class CaptureService : Service(), OverlayController.Listener {
                     val now = SystemClock.uptimeMillis()
                     if (now - lastPush >= 120) {
                         lastPush = now
-                        overlay?.setAnswerPreview(Preview.plain(streamed.toString()))
+                        overlay?.setTranscript(history, question, streamed.toString())
                     }
                 }
 
@@ -386,19 +407,27 @@ class CaptureService : Service(), OverlayController.Listener {
                 val summary: String
                 if (prefs.videoMode) {
                     val hearsAudio = prefs.qwenModelHearsAudio()
-                    if (!prepared.hasAudio) {
+                    if (prepared != null && !prepared.hasAudio) {
                         overlay?.setWarning(silenceMessage(prepared))
                     }
+                    if (prepared == null) overlay?.setStatus("追问中（沿用上一轮的画面）…")
                     answer = withContext(Dispatchers.IO) {
                         videoClient.ask(
-                            question,
-                            prepared.file,
-                            videoPrompt(prepared.hasAudio, hearsAudio),
-                            { status -> overlay?.setStatus(status) },
-                            onDelta
+                            question = question,
+                            video = prepared?.file,
+                            systemPrompt = if (prepared == null) {
+                                videoFollowUpPrompt()
+                            } else {
+                                videoPrompt(prepared.hasAudio, hearsAudio)
+                            },
+                            onStatus = { status -> overlay?.setStatus(status) },
+                            onDelta = onDelta,
+                            history = history
                         )
                     }
-                    summary = buildString {
+                    summary = if (prepared == null) {
+                        "已追问 · 第 ${history.size + 1} 轮（画面沿用上一轮）"
+                    } else buildString {
                         append("已发送 · 视频直传 / ${prepared.durationMs / 1000} 秒 · ")
                         when {
                             !prepared.hasAudio -> append("没采到声音")
@@ -407,28 +436,61 @@ class CaptureService : Service(), OverlayController.Listener {
                         }
                     }
                 } else {
-                    overlay?.setStatus("已发送 ${prepared.frames.size} 帧画面，等模型回答…")
-                    answer = withContext(Dispatchers.IO) {
-                        llm.ask(question, prepared.frames, systemPrompt(), onDelta)
+                    if (prepared == null) {
+                        overlay?.setStatus("追问中（沿用上一轮的画面）…")
+                    } else {
+                        overlay?.setStatus("已发送 ${prepared.frames.size} 帧画面，等模型回答…")
                     }
-                    summary = buildString {
-                        append("已发送 · ${prepared.frames.size} 帧 / ${prepared.durationMs / 1000} 秒")
+                    answer = withContext(Dispatchers.IO) {
+                        llm.ask(
+                            question = question,
+                            jpegBase64 = prepared?.frames ?: emptyList(),
+                            systemPrompt = if (prepared == null) followUpSystemPrompt() else systemPrompt(),
+                            onDelta = onDelta,
+                            history = history
+                        )
+                    }
+                    summary = if (prepared == null) {
+                        "已追问 · 第 ${history.size + 1} 轮（画面沿用上一轮）"
+                    } else {
+                        "已发送 · ${prepared.frames.size} 帧 / ${prepared.durationMs / 1000} 秒"
                     }
                 }
-                overlay?.setAnswer(answer.ifBlank { "模型没有返回内容" })
+
+                // 这一轮入历史 + 落盘，面板重绘成完整对话
+                conv.turns.add(
+                    ChatTurn(question, answer.ifBlank { "模型没有返回内容" }, System.currentTimeMillis(), firstTurn)
+                )
+                overlay?.setTranscript(conv.turns.toList(), null, null)
+
                 val builder = StringBuilder(summary)
                 // 渲染降级时把原因带出来，否则用户只看到一堆 $ 和 #
                 overlay?.lastRenderError?.let { builder.append("\n⚠️ 渲染降级：").append(it) }
-                prepared.savedPath?.let { builder.append("\n片段已保存：").append(it) }
+                prepared?.savedPath?.let { builder.append("\n片段已保存：").append(it) }
                 overlay?.setStatus(builder.toString())
+
+                withContext(Dispatchers.IO) { chatStore.save(conv) }
             } catch (t: Throwable) {
                 Log.e(TAG, "ask failed", t)
                 overlay?.setStatus("出错了：${t.message}")
+                // 失败的一轮不进历史，但把问题留在面板上，方便再点一次发送
+                overlay?.setTranscript(history, question, "")
             } finally {
                 asking = false
                 overlay?.setBusy(false)
             }
         }
+    }
+
+    /** 开始一段新对话：下一问会重新附上画面 */
+    private fun startNewConversation() {
+        conversation = Conversation(System.currentTimeMillis())
+    }
+
+    override fun onNewConversation() {
+        startNewConversation()
+        overlay?.setTranscript(emptyList(), null, null)
+        overlay?.setStatus("已开始新对话 · 下一问会重新附上当前画面")
     }
 
     override fun onStopService() {
@@ -449,6 +511,9 @@ class CaptureService : Service(), OverlayController.Listener {
         localSpeechFailed = false
         toast("已冻结画面，之后的操作不会录进去")
         overlay?.setStatus("✅ 画面已冻结在点按钮那一刻 · 之后的输入不会录进去")
+
+        // 新的一段对话：首轮会带上这批冻结的画面，之后的追问沿用
+        startNewConversation()
 
         // 顺手探一下最近几秒到底有没有声音，让用户在提问前就知道
         if (prefs.videoMode) {
@@ -580,6 +645,24 @@ class CaptureService : Service(), OverlayController.Listener {
         用 Markdown 正常排版即可，不用刻意限制写法：标题、列表、加粗、表格、代码块都行，公式用 LaTeX 写（行内 $...$ 或独立成行 $$...$$ 都可以）。只有两点请避免：不要输出 HTML 标签，不要用 +---+ 这种 ASCII 线框画表格（用 Markdown 表格）。
     """.trimIndent()
 
+    /** 追问用的系统提示：这一轮不再附图，画面沿用上一轮 */
+    private fun followUpSystemPrompt(): String = """
+        你是一个手机屏幕实时助手。用户在追问——这一轮不会再附新截图，画面和你上一轮看到的是同一批（最近 ${prefs.clipSeconds} 秒屏幕）。
+
+        请结合上文里你已经看到的画面继续回答：先给结论或下一步操作建议，再补充必要细节；如果上文信息不足，明确说明还缺什么，不要凭空猜测画面里没出现过的东西。用简体中文回答，控制在 200 字以内，不要描述“我看到了几张截图”这类元信息。
+
+        用 Markdown 正常排版即可，不用刻意限制写法：标题、列表、加粗、表格、代码块都行，公式用 LaTeX 写（行内 $...$ 或独立成行 $$...$$ 都可以）。只有两点请避免：不要输出 HTML 标签，不要用 +---+ 这种 ASCII 线框画表格（用 Markdown 表格）。
+    """.trimIndent()
+
+    /** 视频模式下的追问提示：不再重传视频 */
+    private fun videoFollowUpPrompt(): String = """
+        你是一个手机屏幕实时助手。用户在追问——这一轮不会再重复上传视频，画面和你上一轮看到的是同一段录像（最近 ${prefs.clipSeconds} 秒屏幕）。
+
+        请结合上文继续回答：先给结论或下一步操作建议，再补充必要细节；如果上文信息不足，明确说明还缺什么，不要凭空猜测画面里没出现过的东西，也不要臆测声音内容。用简体中文回答，控制在 200 字以内，不要描述“我看到了录像”这类元信息。
+
+        用 Markdown 正常排版即可，不用刻意限制写法：标题、列表、加粗、表格、代码块都行，公式用 LaTeX 写（行内 $...$ 或独立成行 $$...$$ 都可以）。只有两点请避免：不要输出 HTML 标签，不要用 +---+ 这种 ASCII 线框画表格（用 Markdown 表格）。
+    """.trimIndent()
+
     private fun videoPrompt(hasAudio: Boolean, hearsAudio: Boolean): String {
         val audioHint = when {
             !hasAudio ->
@@ -639,6 +722,7 @@ class CaptureService : Service(), OverlayController.Listener {
             }
             ready = false
             isRunning = false
+            conversation = null
             if (showToast) toast("助手已停止")
             try {
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -672,6 +756,7 @@ class CaptureService : Service(), OverlayController.Listener {
         } catch (_: Throwable) {
         }
         projection = null
+        conversation = null
         scope.cancel()
         super.onDestroy()
     }

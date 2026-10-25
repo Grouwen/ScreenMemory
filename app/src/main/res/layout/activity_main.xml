@@ -65,6 +65,17 @@
                     android:layout_marginTop="6dp"
                     android:textSize="12sp" />
 
+                <TextView
+                    android:id="@+id/tvChatHistory"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:lineSpacingExtra="2dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:text="对话历史：加载中…"
+                    android:textSize="12sp" />
+
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"

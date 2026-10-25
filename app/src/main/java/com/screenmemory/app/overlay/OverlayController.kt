@@ -8,7 +8,9 @@ import android.graphics.Color
 import android.util.Log
 import android.view.ContextThemeWrapper
 import com.screenmemory.app.R
+import com.screenmemory.app.chat.ChatTurn
 import com.screenmemory.app.util.Latex
+import com.screenmemory.app.util.Preview
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
@@ -47,6 +49,9 @@ class OverlayController(
         fun onHoldEnd()
         fun onSend(text: String)
         fun onStopService()
+
+        /** 用户点了「新对话」：清空当前上下文，下一问重新附画面 */
+        fun onNewConversation()
 
         /** 用户点了悬浮球、面板即将出现：此刻应当把画面截断 */
         fun onPanelOpened()
@@ -440,6 +445,15 @@ class OverlayController(
         )
         header.addView(
             TextView(context).apply {
+                text = "新对话"
+                setTextColor(0xFF2F6BFF.toInt())
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setPadding(dp(8), dp(4), dp(8), dp(6))
+                setOnClickListener { listener.onNewConversation() }
+            }
+        )
+        header.addView(
+            TextView(context).apply {
                 text = "✕"
                 setTextColor(0xFF8A8F9C.toInt())
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
@@ -613,35 +627,55 @@ class OverlayController(
         main.post { inputView?.setText(text); inputView?.setSelection(text.length) }
     }
 
-    fun setAnswer(text: String) {
+    /**
+     * 渲染整段对话（多轮追问）。
+     *
+     * @param turns 已经完成的轮次
+     * @param pendingQuestion 正在问的这一句；null 表示当前没有进行中的请求
+     * @param pendingAnswer 流式过程中的半截答案
+     */
+    fun setTranscript(
+        turns: List<ChatTurn>,
+        pendingQuestion: String? = null,
+        pendingAnswer: String? = null
+    ) {
         main.post {
             val view = answerView ?: return@post
             val scroll = answerScroll ?: return@post
-            if (text.isBlank()) {
+            val markdown = buildTranscriptMarkdown(turns, pendingQuestion, pendingAnswer)
+            if (markdown.isBlank()) {
                 view.text = ""
                 scroll.visibility = View.GONE
-            } else {
-                renderMarkdown(view, text)
-                scroll.visibility = View.VISIBLE
-                scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+                return@post
             }
+            if (pendingQuestion != null) {
+                // 流式阶段整段走纯文本，避免半截公式把渲染器炸掉
+                view.text = Preview.plain(markdown)
+            } else {
+                renderMarkdown(view, markdown)
+            }
+            scroll.visibility = View.VISIBLE
+            scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
         }
     }
 
-    /** 流式期间的纯文本预览：不做 Markdown/公式渲染，避免半截公式把绘制炸掉 */
-    fun setAnswerPreview(text: String) {
-        main.post {
-            val view = answerView ?: return@post
-            val scroll = answerScroll ?: return@post
-            if (text.isBlank()) {
-                view.text = ""
-                scroll.visibility = View.GONE
-            } else {
-                view.text = text
-                scroll.visibility = View.VISIBLE
-                scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
-            }
+    private fun buildTranscriptMarkdown(
+        turns: List<ChatTurn>,
+        pendingQuestion: String?,
+        pendingAnswer: String?
+    ): String {
+        val sb = StringBuilder()
+        turns.forEachIndexed { index, turn ->
+            if (index > 0) sb.append("\n\n---\n\n")
+            sb.append("**你**：").append(turn.question).append("\n\n")
+            sb.append("**答**：").append(turn.answer)
         }
+        if (pendingQuestion != null) {
+            if (turns.isNotEmpty()) sb.append("\n\n---\n\n")
+            sb.append("**你**：").append(pendingQuestion).append("\n\n")
+            sb.append("**答**：").append(pendingAnswer.orEmpty())
+        }
+        return sb.toString()
     }
 
     /** 渲染降级链：完整版 → 无公式版 → 纯文本，任何一级失败都不能让答案消失 */
