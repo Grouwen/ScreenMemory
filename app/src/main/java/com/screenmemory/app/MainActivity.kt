@@ -1,0 +1,416 @@
+package com.screenmemory.app
+
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
+import android.view.View
+import android.widget.RadioButton
+import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
+import androidx.core.content.ContextCompat
+import androidx.core.widget.doAfterTextChanged
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.slider.Slider
+import com.google.android.material.textfield.TextInputEditText
+import com.screenmemory.app.service.CaptureService
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var prefs: Prefs
+
+    private lateinit var tvStatus: TextView
+    private lateinit var tvPermission: TextView
+    private lateinit var btnStart: MaterialButton
+    private lateinit var btnStop: MaterialButton
+
+    private lateinit var etApiKey: TextInputEditText
+    private lateinit var etChatBase: TextInputEditText
+    private lateinit var etChatModel: TextInputEditText
+    private lateinit var etAsrBase: TextInputEditText
+    private lateinit var etAsrModel: TextInputEditText
+
+    private lateinit var sliderSeconds: Slider
+    private lateinit var sliderFrames: Slider
+    private lateinit var etSeconds: TextInputEditText
+    private lateinit var etFrames: TextInputEditText
+    private lateinit var swSaveClip: SwitchCompat
+
+    private lateinit var rbFrames: RadioButton
+    private lateinit var rbVideo: RadioButton
+    private lateinit var groupFrames: View
+    private lateinit var groupVideo: View
+    private lateinit var etVideoChat: TextInputEditText
+    private lateinit var etVideoUpload: TextInputEditText
+    private lateinit var etVideoKey: TextInputEditText
+    private lateinit var etVideoModel: TextInputEditText
+    private lateinit var etAsrKey: TextInputEditText
+    private lateinit var swLocalAsr: SwitchCompat
+    private lateinit var rbAudioAuto: RadioButton
+    private lateinit var rbAudioOn: RadioButton
+    private lateinit var rbAudioOff: RadioButton
+    private lateinit var tvAudioModeHint: TextView
+    private lateinit var rbQualitySaver: RadioButton
+    private lateinit var rbQualityStandard: RadioButton
+    private lateinit var rbQualitySharp: RadioButton
+    private lateinit var tvQualityHint: TextView
+
+    /** 防止输入框与滑块互相回调造成死循环 */
+    private var syncing = false
+
+    private val projectionLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val data = result.data
+            if (result.resultCode == RESULT_OK && data != null) {
+                launchService(result.resultCode, data)
+            } else {
+                toast("没有获得录屏授权，助手未启动")
+            }
+        }
+
+    private val permissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+            if (grants[Manifest.permission.RECORD_AUDIO] == true) {
+                ensureOverlayThenCapture()
+            } else {
+                toast("需要麦克风权限才能录声音")
+            }
+        }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+        prefs = Prefs(this)
+        bindViews()
+        loadSettings()
+        bindActions()
+    }
+
+    private fun bindViews() {
+        tvStatus = findViewById(R.id.tvStatus)
+        tvPermission = findViewById(R.id.tvPermission)
+        btnStart = findViewById(R.id.btnStart)
+        btnStop = findViewById(R.id.btnStop)
+        etApiKey = findViewById(R.id.etApiKey)
+        etChatBase = findViewById(R.id.etChatBase)
+        etChatModel = findViewById(R.id.etChatModel)
+        etAsrBase = findViewById(R.id.etAsrBase)
+        etAsrModel = findViewById(R.id.etAsrModel)
+        sliderSeconds = findViewById(R.id.sliderSeconds)
+        sliderFrames = findViewById(R.id.sliderFrames)
+        etSeconds = findViewById(R.id.etSeconds)
+        etFrames = findViewById(R.id.etFrames)
+        swSaveClip = findViewById(R.id.swSaveClip)
+
+        rbFrames = findViewById(R.id.rbFrames)
+        rbVideo = findViewById(R.id.rbVideo)
+        groupFrames = findViewById(R.id.groupFrames)
+        groupVideo = findViewById(R.id.groupVideo)
+        etVideoChat = findViewById(R.id.etVideoChat)
+        etVideoUpload = findViewById(R.id.etVideoUpload)
+        etVideoKey = findViewById(R.id.etVideoKey)
+        etVideoModel = findViewById(R.id.etVideoModel)
+        etAsrKey = findViewById(R.id.etAsrKey)
+        swLocalAsr = findViewById(R.id.swLocalAsr)
+        rbAudioAuto = findViewById(R.id.rbAudioAuto)
+        rbAudioOn = findViewById(R.id.rbAudioOn)
+        rbAudioOff = findViewById(R.id.rbAudioOff)
+        tvAudioModeHint = findViewById(R.id.tvAudioModeHint)
+        rbQualitySaver = findViewById(R.id.rbQualitySaver)
+        rbQualityStandard = findViewById(R.id.rbQualityStandard)
+        rbQualitySharp = findViewById(R.id.rbQualitySharp)
+        tvQualityHint = findViewById(R.id.tvQualityHint)
+    }
+
+    private fun loadSettings() {
+        etApiKey.setText(prefs.apiKey)
+        etChatBase.setText(prefs.chatUrl)
+        etChatModel.setText(prefs.chatModel)
+        etAsrBase.setText(prefs.asrUrl)
+        etAsrModel.setText(prefs.asrModel)
+
+        syncing = true
+        sliderSeconds.value = prefs.clipSeconds.toFloat()
+        sliderFrames.value = prefs.frameCount.toFloat()
+        etSeconds.setText(prefs.clipSeconds.toString())
+        etFrames.setText(prefs.frameCount.toString())
+        syncing = false
+
+        when (prefs.qualityProfile) {
+            0 -> rbQualitySaver.isChecked = true
+            2 -> rbQualitySharp.isChecked = true
+            else -> rbQualityStandard.isChecked = true
+        }
+        updateQualityHint()
+
+        swSaveClip.isChecked = prefs.saveClip
+
+        etVideoChat.setText(prefs.qwenChatUrl)
+        etVideoUpload.setText(prefs.qwenUploadUrl)
+        etVideoKey.setText(prefs.qwenApiKey)
+        etVideoModel.setText(prefs.qwenVideoModel)
+        etAsrKey.setText(prefs.asrApiKey)
+        swLocalAsr.isChecked = prefs.preferLocalAsr
+        when (prefs.qwenAudioMode) {
+            1 -> rbAudioOn.isChecked = true
+            2 -> rbAudioOff.isChecked = true
+            else -> rbAudioAuto.isChecked = true
+        }
+        updateAudioHint()
+        if (prefs.videoMode) rbVideo.isChecked = true else rbFrames.isChecked = true
+        updateModeVisibility()
+    }
+
+    private fun updateModeVisibility() {
+        val video = rbVideo.isChecked
+        groupFrames.visibility = if (video) View.GONE else View.VISIBLE
+        groupVideo.visibility = if (video) View.VISIBLE else View.GONE
+    }
+
+    private fun updateQualityHint() {
+        val index = when {
+            rbQualitySaver.isChecked -> 0
+            rbQualitySharp.isChecked -> 2
+            else -> 1
+        }
+        val seconds = sliderSeconds.value.toInt()
+        tvQualityHint.text = "当前：" + QualityProfile.of(index).summary(seconds)
+    }
+
+    /** 让用户看到「能听声音」当前到底是自动判定的结果，还是手动指定 */
+    private fun updateAudioHint() {
+        val model = etVideoModel.text?.toString()?.trim().orEmpty().ifBlank { "qwen-vl-max" }
+        val autoHears = model.contains("omni", ignoreCase = true)
+        tvAudioModeHint.text = when {
+            rbAudioOn.isChecked -> "当前：能听声音（手动指定）"
+            rbAudioOff.isChecked -> "当前：听不到声音（手动指定）"
+            autoHears -> "自动判定：能听声音（型号含 omni）"
+            else -> "自动判定：听不到声音（型号不含 omni）"
+        }
+    }
+
+    private fun bindActions() {
+        sliderSeconds.addOnChangeListener { _, value, _ ->
+            if (syncing) return@addOnChangeListener
+            syncing = true
+            val text = value.toInt().toString()
+            etSeconds.setText(text)
+            etSeconds.setSelection(text.length)
+            syncing = false
+            updateQualityHint()
+        }
+        sliderFrames.addOnChangeListener { _, value, _ ->
+            if (syncing) return@addOnChangeListener
+            syncing = true
+            val text = value.toInt().toString()
+            etFrames.setText(text)
+            etFrames.setSelection(text.length)
+            syncing = false
+        }
+        etSeconds.doAfterTextChanged { editable ->
+            if (syncing) return@doAfterTextChanged
+            val value = editable?.toString()?.toIntOrNull() ?: return@doAfterTextChanged
+            if (value in CLIP_MIN..CLIP_MAX) {
+                syncing = true
+                sliderSeconds.value = value.toFloat()
+                syncing = false
+            }
+        }
+        etFrames.doAfterTextChanged { editable ->
+            if (syncing) return@doAfterTextChanged
+            val value = editable?.toString()?.toIntOrNull() ?: return@doAfterTextChanged
+            if (value in FRAME_MIN..FRAME_MAX) {
+                syncing = true
+                sliderFrames.value = value.toFloat()
+                syncing = false
+            }
+        }
+        btnStart.setOnClickListener {
+            saveSettings()
+            startAssistant()
+        }
+        findViewById<android.widget.RadioGroup>(R.id.rgMode).setOnCheckedChangeListener { _, _ ->
+            updateModeVisibility()
+        }
+        findViewById<android.widget.RadioGroup>(R.id.rgAudioMode).setOnCheckedChangeListener { _, _ ->
+            updateAudioHint()
+        }
+        findViewById<android.widget.RadioGroup>(R.id.rgQuality).setOnCheckedChangeListener { _, _ ->
+            updateQualityHint()
+        }
+        etVideoModel.doAfterTextChanged { updateAudioHint() }
+        btnStop.setOnClickListener {
+            startService(CaptureService.stopIntent(this))
+            Handler(Looper.getMainLooper()).postDelayed({ refreshStatus() }, 600)
+        }
+    }
+
+    private fun saveSettings() {
+        prefs.apiKey = etApiKey.text?.toString()?.trim().orEmpty()
+        prefs.chatUrl = etChatBase.text?.toString()?.trim().orEmpty()
+        prefs.chatModel = etChatModel.text?.toString()?.trim().orEmpty()
+        prefs.asrUrl = etAsrBase.text?.toString()?.trim().orEmpty()
+        prefs.asrModel = etAsrModel.text?.toString()?.trim().orEmpty()
+
+        val seconds = etSeconds.text?.toString()?.toIntOrNull() ?: prefs.clipSeconds
+        val frames = etFrames.text?.toString()?.toIntOrNull() ?: prefs.frameCount
+        prefs.clipSeconds = seconds
+        prefs.frameCount = frames
+        prefs.qualityProfile = when {
+            rbQualitySaver.isChecked -> 0
+            rbQualitySharp.isChecked -> 2
+            else -> 1
+        }
+        prefs.saveClip = swSaveClip.isChecked
+        prefs.videoMode = rbVideo.isChecked
+        prefs.qwenChatUrl = etVideoChat.text?.toString()?.trim().orEmpty()
+        prefs.qwenUploadUrl = etVideoUpload.text?.toString()?.trim().orEmpty()
+        prefs.qwenApiKey = etVideoKey.text?.toString()?.trim().orEmpty()
+        prefs.qwenVideoModel = etVideoModel.text?.toString()?.trim().orEmpty()
+        prefs.asrApiKey = etAsrKey.text?.toString()?.trim().orEmpty()
+        prefs.preferLocalAsr = swLocalAsr.isChecked
+        prefs.qwenAudioMode = when {
+            rbAudioOn.isChecked -> 1
+            rbAudioOff.isChecked -> 2
+            else -> 0
+        }
+
+        // 超出范围时把输入框拉回合法值，让用户看到实际生效的数字
+        syncing = true
+        if (etSeconds.text?.toString() != prefs.clipSeconds.toString()) {
+            etSeconds.setText(prefs.clipSeconds.toString())
+        }
+        if (etFrames.text?.toString() != prefs.frameCount.toString()) {
+            etFrames.setText(prefs.frameCount.toString())
+        }
+        sliderSeconds.value = prefs.clipSeconds.toFloat()
+        sliderFrames.value = prefs.frameCount.toFloat()
+        syncing = false
+
+        notifyServiceSettingsChanged()
+    }
+
+    /** 服务在运行时，把新的时长/帧数推给正在录制的实例 */
+    private fun notifyServiceSettingsChanged() {
+        if (!CaptureService.isRunning) return
+        try {
+            startService(
+                Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_UPDATE)
+            )
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun startAssistant() {
+        if (CaptureService.isRunning) {
+            toast("助手已经在运行了")
+            return
+        }
+        val missing = mutableListOf<String>()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            missing.add(Manifest.permission.RECORD_AUDIO)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            missing.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (missing.isNotEmpty()) {
+            permissionLauncher.launch(missing.toTypedArray())
+            return
+        }
+        ensureOverlayThenCapture()
+    }
+
+    private fun ensureOverlayThenCapture() {
+        if (!Settings.canDrawOverlays(this)) {
+            toast("请先打开“显示在其他应用上层”权限")
+            try {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            } catch (t: Throwable) {
+                startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
+            }
+            return
+        }
+        val manager = getSystemService(MediaProjectionManager::class.java)
+        projectionLauncher.launch(manager.createScreenCaptureIntent())
+    }
+
+    private fun launchService(resultCode: Int, data: Intent) {
+        saveSettings()
+        try {
+            ContextCompat.startForegroundService(
+                this,
+                CaptureService.startIntent(this, resultCode, data)
+            )
+            toast("助手启动中…")
+            Handler(Looper.getMainLooper()).postDelayed({
+                try {
+                    moveTaskToBack(true)
+                } catch (_: Throwable) {
+                }
+            }, 900)
+        } catch (t: Throwable) {
+            toast("启动失败：${t.message}")
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshStatus()
+    }
+
+    override fun onPause() {
+        saveSettings()
+        super.onPause()
+    }
+
+    private fun refreshStatus() {
+        val running = CaptureService.isRunning
+        tvStatus.text = if (running) "运行中 · 悬浮球已就绪" else "未运行"
+        tvStatus.setTextColor(if (running) 0xFF12B76A.toInt() else 0xFF8A8F9C.toInt())
+        btnStart.isEnabled = !running
+        btnStop.isEnabled = running
+
+        val mic = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        val overlay = Settings.canDrawOverlays(this)
+        val notify = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        tvPermission.text = buildString {
+            append(if (mic) "麦克风 ✓" else "麦克风 ✗")
+            append("    ")
+            append(if (overlay) "悬浮窗 ✓" else "悬浮窗 ✗")
+            append("    ")
+            append(if (notify) "通知 ✓" else "通知 ✗")
+        }
+    }
+
+    private fun toast(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    }
+
+    private companion object {
+        const val CLIP_MIN = 5
+        const val CLIP_MAX = 60
+        const val FRAME_MIN = 1
+        const val FRAME_MAX = 20
+    }
+}

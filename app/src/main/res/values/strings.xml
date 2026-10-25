@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">屏幕助手</string>
+    <string name="app_subtitle">常驻悬浮窗 · 始终保留最近 30 秒画面与声音 · 一句话问 AI</string>
+
+    <string name="section_status">运行状态</string>
+    <string name="section_api">语音转写 · 按住说话</string>
+    <string name="section_capture">录制参数</string>
+
+    <string name="hint_api_key">API Key</string>
+    <string name="hint_base_url">对话接口 Base URL</string>
+    <string name="hint_model">对话模型</string>
+    <string name="hint_asr_base_url">语音转写 Base URL（留空则同上）</string>
+    <string name="hint_asr_model">语音转写模型</string>
+
+    <string name="btn_start">启动助手</string>
+    <string name="btn_stop">停止</string>
+</resources>
