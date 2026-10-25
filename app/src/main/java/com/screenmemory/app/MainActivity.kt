@@ -12,11 +12,9 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.View
 import android.widget.RadioButton
-import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
 import androidx.core.content.ContextCompat
@@ -25,11 +23,7 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.slider.Slider
 import com.google.android.material.textfield.TextInputEditText
 import com.screenmemory.app.chat.ChatStore
-import com.screenmemory.app.chat.Conversation
 import com.screenmemory.app.service.CaptureService
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
@@ -38,6 +32,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvStatus: TextView
     private lateinit var tvPermission: TextView
     private lateinit var tvChatHistory: TextView
+    private lateinit var btnHistory: MaterialButton
     private lateinit var btnStart: MaterialButton
     private lateinit var btnStop: MaterialButton
 
@@ -107,6 +102,7 @@ class MainActivity : AppCompatActivity() {
         tvStatus = findViewById(R.id.tvStatus)
         tvPermission = findViewById(R.id.tvPermission)
         tvChatHistory = findViewById(R.id.tvChatHistory)
+        btnHistory = findViewById(R.id.btnHistory)
         btnStart = findViewById(R.id.btnStart)
         btnStop = findViewById(R.id.btnStop)
         etApiKey = findViewById(R.id.etApiKey)
@@ -257,7 +253,7 @@ class MainActivity : AppCompatActivity() {
             updateQualityHint()
         }
         etVideoModel.doAfterTextChanged { updateAudioHint() }
-        tvChatHistory.setOnClickListener { showHistoryDialog() }
+        btnHistory.setOnClickListener { openHistory() }
         btnStop.setOnClickListener {
             startService(CaptureService.stopIntent(this))
             Handler(Looper.getMainLooper()).postDelayed({ refreshStatus() }, 600)
@@ -420,64 +416,13 @@ class MainActivity : AppCompatActivity() {
         tvChatHistory.text = if (sessions == 0) {
             "对话历史：暂无（问过之后会自动存在本机）"
         } else {
-            "对话历史：$sessions 段 / $turns 轮（点这里查看）"
+            "对话历史：$sessions 段 / $turns 轮"
         }
-        tvChatHistory.isClickable = sessions > 0
+        btnHistory.isEnabled = true
     }
 
-    /** 历史列表：点一段看完整问答 */
-    private fun showHistoryDialog() {
-        val store = ChatStore(this)
-        val all = store.loadAll()
-        if (all.isEmpty()) {
-            toast("还没有对话记录")
-            return
-        }
-        val format = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
-        val labels = all.map { conv ->
-            val first = conv.turns.firstOrNull()?.question?.replace('\n', ' ')?.take(20).orEmpty()
-            "${format.format(Date(conv.id))} · ${conv.turns.size} 轮 · $first"
-        }.toTypedArray()
-
-        AlertDialog.Builder(this)
-            .setTitle("对话历史（${all.size} 段）")
-            .setItems(labels) { _, which -> showTranscriptDialog(all[which]) }
-            .setPositiveButton("关闭", null)
-            .setNegativeButton("清空全部") { _, _ -> confirmClearHistory(store) }
-            .show()
-    }
-
-    private fun showTranscriptDialog(conv: Conversation) {
-        val text = conv.turns.joinToString("\n\n") { turn ->
-            "你：${turn.question}\n\n答：${turn.answer}"
-        }
-        val density = resources.displayMetrics.density
-        val pad = (density * 20).toInt()
-        val body = TextView(this).apply {
-            setText(text)
-            setTextIsSelectable(true)
-            setPadding(pad, (density * 12).toInt(), pad, (density * 12).toInt())
-            textSize = 14f
-        }
-        val scroll = ScrollView(this).apply { addView(body) }
-        val title = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(conv.id))
-        AlertDialog.Builder(this)
-            .setTitle(title)
-            .setView(scroll)
-            .setPositiveButton("关闭", null)
-            .show()
-    }
-
-    private fun confirmClearHistory(store: ChatStore) {
-        AlertDialog.Builder(this)
-            .setMessage("删除本机保存的全部对话记录？")
-            .setPositiveButton("删除") { _, _ ->
-                store.clear()
-                refreshHistoryRow()
-                toast("已清空对话历史")
-            }
-            .setNegativeButton("取消", null)
-            .show()
+    private fun openHistory() {
+        startActivity(Intent(this, HistoryActivity::class.java))
     }
 
     private fun toast(message: String) {

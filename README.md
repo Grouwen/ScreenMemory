@@ -202,7 +202,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ```
 app/src/main/java/com/screenmemory/app/
-├── MainActivity.kt                  权限流程 + 配置界面 + 对话历史查看
+├── MainActivity.kt                  权限流程 + 配置界面
+├── HistoryActivity.kt               对话历史列表（App 内页面）
+├── HistoryDetailActivity.kt         单段对话的完整问答
 ├── Prefs.kt                         配置存取
 ├── chat/
 │   └── ChatStore.kt                 多轮对话的本地记录（ChatTurn / Conversation / JSON 落盘）
@@ -309,7 +311,12 @@ H.264 不能从任意帧开始解码，所以导出会向前找到最近的一�
 
 历史落盘在 [ChatStore.kt](app/src/main/java/com/screenmemory/app/chat/ChatStore.kt)：
 `filesDir/chat_history.json`，一段对话一条记录（id = 冻结时刻），只留最近 30 段、每段 20 轮；
-写盘是「临时文件 + rename」，进程被杀也不会留下半截 JSON。设置页顶部显示「已保存 N 段 / M 轮」，点开能看全文或清空。
+写盘是「临时文件 + rename」，进程被杀也不会留下半截 JSON。
+
+**看历史在 App 里，不在悬浮窗里**：首页「查看对话历史」按钮进入独立的
+[HistoryActivity](app/src/main/java/com/screenmemory/app/HistoryActivity.kt)（列表：时间 · 轮数 · 首个问题 · 最后回答摘要），
+点一段进 [HistoryDetailActivity](app/src/main/java/com/screenmemory/app/HistoryDetailActivity.kt) 看完整问答（Markdown + 公式渲染，可选中复制），
+列表页右上角「清空」。悬浮窗里只有「新对话」（清上下文），不承担历史浏览。
 
 **⑧ 流式输出 + Markdown/公式渲染。**
 `stream: true` 后按 SSE 逐行读 `choices[0].delta.content`（`Sse.consume()` 两家共用），刷新做 120ms 节流。
