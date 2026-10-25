@@ -3,7 +3,6 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#FFF7F8FA"
     android:orientation="vertical">
 
     <!-- 顶部标题 -->
@@ -37,12 +36,8 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:background="#00FFFFFF"
         app:tabGravity="fill"
-        app:tabIndicatorColor="#FF2F6BFF"
-        app:tabMode="fixed"
-        app:tabSelectedTextColor="#FF12131A"
-        app:tabTextColor="#FF8A8F9C" />
+        app:tabMode="fixed" />
 
     <FrameLayout
         android:layout_width="match_parent"
@@ -731,7 +726,7 @@
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:text="还没有对话记录"
-                    android:textColor="#FF8A8F9C"
+                    android:textColor="?android:attr/textColorSecondary"
                     android:textSize="12sp" />
 
                 <TextView
@@ -744,7 +739,7 @@
                     android:paddingEnd="4dp"
                     android:paddingBottom="6dp"
                     android:text="清空"
-                    android:textColor="#FF8A8F9C"
+                    android:textColor="?attr/colorPrimary"
                     android:textSize="13sp"
                     android:visibility="gone" />
             </LinearLayout>

@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+      品牌色跟悬浮球 / 提问面板的蓝保持一致（#2F6BFF），
+      否则设置页会用 Material3 默认的紫色主色，和悬浮窗看起来像两个 App。
+    -->
     <style name="Theme.ScreenMemory" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#FF2F6BFF</item>
+        <item name="colorOnPrimary">#FFFFFFFF</item>
+        <item name="colorPrimaryContainer">#FFE8EFFF</item>
+        <item name="colorOnPrimaryContainer">#FF12131A</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>
     </style>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      深色模式的同一套主题：value-night 下的同名 style 会整体覆盖 values/，
+      所以这里要写全，不能只写差异项。
+      主色提亮，保证在深色表面上的对比度。
+    -->
+    <style name="Theme.ScreenMemory" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#FF7EA0FF</item>
+        <item name="colorOnPrimary">#FF0B1020</item>
+        <item name="colorPrimaryContainer">#FF1B2640</item>
+        <item name="colorOnPrimaryContainer">#FFE8EFFF</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

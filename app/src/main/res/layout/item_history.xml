@@ -8,10 +8,9 @@
     android:clickable="true"
     android:focusable="true"
     android:foreground="?attr/selectableItemBackground"
-    app:cardBackgroundColor="#FFFFFFFF"
     app:cardCornerRadius="14dp"
     app:cardElevation="0dp"
-    app:strokeColor="#1A000000"
+    app:strokeColor="?attr/colorOutline"
     app:strokeWidth="1dp">
 
     <LinearLayout
@@ -24,7 +23,7 @@
             android:id="@+id/tvItemMeta"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textColor="#FF8A8F9C"
+            android:textColor="?android:attr/textColorSecondary"
             android:textSize="11sp" />
 
         <TextView
@@ -34,7 +33,7 @@
             android:layout_marginTop="6dp"
             android:ellipsize="end"
             android:maxLines="2"
-            android:textColor="#FF12131A"
+            android:textColor="?android:attr/textColorPrimary"
             android:textSize="14sp"
             android:textStyle="bold" />
 
@@ -46,7 +45,7 @@
             android:ellipsize="end"
             android:lineSpacingExtra="2dp"
             android:maxLines="2"
-            android:textColor="#FF6B7280"
+            android:textColor="?android:attr/textColorSecondary"
             android:textSize="12sp" />
     </LinearLayout>
 </com.google.android.material.card.MaterialCardView>
