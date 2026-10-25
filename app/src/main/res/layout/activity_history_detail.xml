@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#FFF7F8FA"
@@ -40,6 +41,7 @@
     </LinearLayout>
 
     <ScrollView
+        android:id="@+id/detailScroll"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
@@ -47,7 +49,7 @@
         android:paddingStart="16dp"
         android:paddingTop="4dp"
         android:paddingEnd="16dp"
-        android:paddingBottom="24dp">
+        android:paddingBottom="16dp">
 
         <TextView
             android:id="@+id/tvDetailBody"
@@ -58,4 +60,60 @@
             android:textIsSelectable="true"
             android:textSize="14sp" />
     </ScrollView>
+
+    <!-- 继续追问 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#FFFFFFFF"
+        android:orientation="vertical"
+        android:paddingStart="14dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="14dp"
+        android:paddingBottom="12dp">
+
+        <TextView
+            android:id="@+id/tvFollowStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingBottom="6dp"
+            android:text="可以接着问（不再附图，只依据上面的对话回答）"
+            android:textColor="#FF8A8F9C"
+            android:textSize="11sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/etFollowInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="#FFF2F3F7"
+                android:hint="继续追问…"
+                android:inputType="textMultiLine"
+                android:maxLines="3"
+                android:minLines="1"
+                android:paddingStart="12dp"
+                android:paddingTop="10dp"
+                android:paddingEnd="12dp"
+                android:paddingBottom="10dp"
+                android:textColor="#FF12131A"
+                android:textSize="14sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnFollowSend"
+                android:layout_width="wrap_content"
+                android:layout_height="46dp"
+                android:layout_marginStart="8dp"
+                android:minWidth="0dp"
+                android:paddingStart="18dp"
+                android:paddingEnd="18dp"
+                android:text="发送"
+                app:cornerRadius="12dp" />
+        </LinearLayout>
+    </LinearLayout>
 </LinearLayout>

@@ -11,13 +11,33 @@
         android:orientation="vertical"
         android:padding="20dp">
 
-        <TextView
-            android:layout_width="wrap_content"
+        <!-- 顶部：标题 + 对话历史入口（与下面的主功能区隔开） -->
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="@string/app_name"
-            android:textSize="28sp"
-            android:textStyle="bold" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/app_name"
+                android:textSize="28sp"
+                android:textStyle="bold" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnHistory"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="0dp"
+                android:paddingStart="12dp"
+                android:paddingEnd="4dp"
+                android:text="对话历史"
+                android:textSize="13sp" />
+        </LinearLayout>
 
         <TextView
             android:layout_width="match_parent"
@@ -64,24 +84,6 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="6dp"
                     android:textSize="12sp" />
-
-                <TextView
-                    android:id="@+id/tvChatHistory"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:lineSpacingExtra="2dp"
-                    android:text="对话历史：加载中…"
-                    android:textSize="12sp" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnHistory"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
-                    android:layout_width="match_parent"
-                    android:layout_height="46dp"
-                    android:layout_marginTop="8dp"
-                    android:text="查看对话历史"
-                    app:cornerRadius="14dp" />
 
                 <LinearLayout
                     android:layout_width="match_parent"

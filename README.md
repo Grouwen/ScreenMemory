@@ -313,10 +313,16 @@ H.264 不能从任意帧开始解码，所以导出会向前找到最近的一�
 `filesDir/chat_history.json`，一段对话一条记录（id = 冻结时刻），只留最近 30 段、每段 20 轮；
 写盘是「临时文件 + rename」，进程被杀也不会留下半截 JSON。
 
-**看历史在 App 里，不在悬浮窗里**：首页「查看对话历史」按钮进入独立的
-[HistoryActivity](app/src/main/java/com/screenmemory/app/HistoryActivity.kt)（列表：时间 · 轮数 · 首个问题 · 最后回答摘要），
-点一段进 [HistoryDetailActivity](app/src/main/java/com/screenmemory/app/HistoryDetailActivity.kt) 看完整问答（Markdown + 公式渲染，可选中复制），
-列表页右上角「清空」。悬浮窗里只有「新对话」（清上下文），不承担历史浏览。
+**看历史在 App 里，不在悬浮窗里**：入口在首页**顶部**（大标题右边的「对话历史（N）」按钮），和下面的启动/停止、参数配置分成两块。
+点进去是 [HistoryActivity](app/src/main/java/com/screenmemory/app/HistoryActivity.kt)：列表每段一张卡片（时间 · 轮数 · 首个问题 · 最后回答摘要），右上角「清空」。
+
+**历史对话可以接着聊**：[HistoryDetailActivity](app/src/main/java/com/screenmemory/app/HistoryDetailActivity.kt) 底部有输入框，
+新问题会带着这段对话的历史（最近 10 轮）发给模型，回答流式写入、完成后追加到同一段并落盘，回到列表能看到轮数变了。
+
+有两点是刻意的限制：
+
+- **不附图**：原始抽帧/视频本来就没落盘，历史里的追问只能是纯文字，所以提示词里写明了「必须看画面才能回答时，请让用户回到悬浮球重新问」，不让模型瞎猜；
+- **按当前模式选端点**：视频模式走 `QwenVideoClient`（`video = null`，跳过上传），抽帧模式走 `LlmClient`，两边都用你在设置里填的 key/URL。
 
 **⑧ 流式输出 + Markdown/公式渲染。**
 `stream: true` 后按 SSE 逐行读 `choices[0].delta.content`（`Sse.consume()` 两家共用），刷新做 120ms 节流。

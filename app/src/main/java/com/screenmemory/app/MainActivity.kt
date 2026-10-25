@@ -31,7 +31,6 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var tvStatus: TextView
     private lateinit var tvPermission: TextView
-    private lateinit var tvChatHistory: TextView
     private lateinit var btnHistory: MaterialButton
     private lateinit var btnStart: MaterialButton
     private lateinit var btnStop: MaterialButton
@@ -101,7 +100,6 @@ class MainActivity : AppCompatActivity() {
     private fun bindViews() {
         tvStatus = findViewById(R.id.tvStatus)
         tvPermission = findViewById(R.id.tvPermission)
-        tvChatHistory = findViewById(R.id.tvChatHistory)
         btnHistory = findViewById(R.id.btnHistory)
         btnStart = findViewById(R.id.btnStart)
         btnStop = findViewById(R.id.btnStop)
@@ -412,13 +410,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshHistoryRow() {
-        val (sessions, turns) = ChatStore(this).stats()
-        tvChatHistory.text = if (sessions == 0) {
-            "对话历史：暂无（问过之后会自动存在本机）"
-        } else {
-            "对话历史：$sessions 段 / $turns 轮"
-        }
-        btnHistory.isEnabled = true
+        val sessions = ChatStore(this).stats().first
+        btnHistory.text = if (sessions == 0) "对话历史" else "对话历史（$sessions）"
     }
 
     private fun openHistory() {
