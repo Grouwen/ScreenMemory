@@ -78,10 +78,10 @@ class LlmClient(private val prefs: Prefs) {
         val content = JSONArray()
         val intro = when {
             jpegBase64.isNotEmpty() ->
-                question + "\n\n（以下是用户最近屏幕中抽取的 " + jpegBase64.size +
-                    " 张截图，按时间先后排列，最后一张最接近提问瞬间）"
+                question + "\n\n（以下是这节网课最近 " + jpegBase64.size +
+                    " 个时刻的截图，按时间先后排列，最后一张最接近提问的那一刻）"
             history.isNotEmpty() ->
-                question + "\n\n（这是追问，不重复附图：画面和你上一轮看到的是同一批，请沿用上文里的画面信息）"
+                question + "\n\n（这是追问，不重复附图：板书和你上一轮看到的是同一批，请沿用上文里的画面信息）"
             else -> question
         }
         content.put(JSONObject().put("type", "text").put("text", intro))
