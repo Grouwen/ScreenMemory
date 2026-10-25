@@ -36,12 +36,6 @@
         </activity>
 
         <activity
-            android:name=".HistoryActivity"
-            android:exported="false"
-            android:label="对话历史"
-            android:theme="@style/Theme.ScreenMemory" />
-
-        <activity
             android:name=".HistoryDetailActivity"
             android:exported="false"
             android:label="对话详情"

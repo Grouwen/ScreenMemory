@@ -10,20 +10,28 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.view.LayoutInflater
 import android.view.View
+import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
 import androidx.core.content.ContextCompat
 import androidx.core.widget.doAfterTextChanged
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.slider.Slider
+import com.google.android.material.tabs.TabLayout
 import com.google.android.material.textfield.TextInputEditText
 import com.screenmemory.app.chat.ChatStore
+import com.screenmemory.app.chat.Conversation
 import com.screenmemory.app.service.CaptureService
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
@@ -31,9 +39,16 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var tvStatus: TextView
     private lateinit var tvPermission: TextView
-    private lateinit var btnHistory: MaterialButton
     private lateinit var btnStart: MaterialButton
     private lateinit var btnStop: MaterialButton
+
+    // 顶部两个平级入口
+    private lateinit var tabs: TabLayout
+    private lateinit var mainPane: View
+    private lateinit var historyPane: View
+    private lateinit var historyList: LinearLayout
+    private lateinit var tvHistoryCount: TextView
+    private lateinit var tvClearHistory: TextView
 
     private lateinit var etApiKey: TextInputEditText
     private lateinit var etChatBase: TextInputEditText
@@ -100,7 +115,12 @@ class MainActivity : AppCompatActivity() {
     private fun bindViews() {
         tvStatus = findViewById(R.id.tvStatus)
         tvPermission = findViewById(R.id.tvPermission)
-        btnHistory = findViewById(R.id.btnHistory)
+        tabs = findViewById(R.id.tabs)
+        mainPane = findViewById(R.id.mainPane)
+        historyPane = findViewById(R.id.historyPane)
+        historyList = findViewById(R.id.historyList)
+        tvHistoryCount = findViewById(R.id.tvHistoryCount)
+        tvClearHistory = findViewById(R.id.tvClearHistory)
         btnStart = findViewById(R.id.btnStart)
         btnStop = findViewById(R.id.btnStop)
         etApiKey = findViewById(R.id.etApiKey)
@@ -251,7 +271,7 @@ class MainActivity : AppCompatActivity() {
             updateQualityHint()
         }
         etVideoModel.doAfterTextChanged { updateAudioHint() }
-        btnHistory.setOnClickListener { openHistory() }
+        setupTabs()
         btnStop.setOnClickListener {
             startService(CaptureService.stopIntent(this))
             Handler(Looper.getMainLooper()).postDelayed({ refreshStatus() }, 600)
@@ -406,16 +426,82 @@ class MainActivity : AppCompatActivity() {
             append("    ")
             append(if (notify) "通知 ✓" else "通知 ✗")
         }
-        refreshHistoryRow()
+        refreshHistory()
     }
 
-    private fun refreshHistoryRow() {
-        val sessions = ChatStore(this).stats().first
-        btnHistory.text = if (sessions == 0) "对话历史" else "对话历史（$sessions）"
+    // ------------------------------------------------------------------ 顶部两个平级入口
+
+    private fun setupTabs() {
+        tabs.removeAllTabs()
+        tabs.addTab(tabs.newTab().setText("主功能"))
+        tabs.addTab(tabs.newTab().setText("对话历史"))
+        tabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab) {
+                val history = tab.position == 1
+                mainPane.visibility = if (history) View.GONE else View.VISIBLE
+                historyPane.visibility = if (history) View.VISIBLE else View.GONE
+                if (history) refreshHistory()
+            }
+
+            override fun onTabUnselected(tab: TabLayout.Tab) = Unit
+            override fun onTabReselected(tab: TabLayout.Tab) {
+                if (tab.position == 1) refreshHistory()
+            }
+        })
     }
 
-    private fun openHistory() {
-        startActivity(Intent(this, HistoryActivity::class.java))
+    /** 历史列表：每段一张卡片，点进去看全文并可以继续追问 */
+    private fun refreshHistory() {
+        val store = ChatStore(this)
+        val all = store.loadAll()
+        val totalTurns = all.sumOf { it.turns.size }
+        tvHistoryCount.text = if (all.isEmpty()) {
+            "还没有对话记录 · 点悬浮球提问后会自动保存在本机"
+        } else {
+            "$totalTurns 轮 · ${all.size} 段对话"
+        }
+        tvClearHistory.visibility = if (all.isEmpty()) View.GONE else View.VISIBLE
+        tvClearHistory.setOnClickListener { confirmClearHistory(store) }
+
+        historyList.removeAllViews()
+        val inflater = LayoutInflater.from(this)
+        val format = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+        for (conv in all) {
+            val item = inflater.inflate(R.layout.item_history, historyList, false)
+            item.findViewById<TextView>(R.id.tvItemMeta).text =
+                format.format(Date(conv.id)) + " · " + conv.turns.size + " 轮"
+            item.findViewById<TextView>(R.id.tvItemQuestion).text =
+                conv.turns.firstOrNull()?.question?.trim().orEmpty().ifBlank { "（无提问）" }
+            item.findViewById<TextView>(R.id.tvItemAnswer).text =
+                conv.turns.lastOrNull()?.answer?.trim()?.replace('\n', ' ').orEmpty()
+                    .ifBlank { "（没有回答）" }
+            item.setOnClickListener { openHistoryDetail(conv) }
+            historyList.addView(
+                item,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
+    }
+
+    private fun openHistoryDetail(conv: Conversation) {
+        startActivity(
+            Intent(this, HistoryDetailActivity::class.java)
+                .putExtra(HistoryDetailActivity.EXTRA_ID, conv.id)
+        )
+    }
+
+    private fun confirmClearHistory(store: ChatStore) {
+        AlertDialog.Builder(this)
+            .setMessage("删除本机保存的全部对话记录？这个操作不能撤销。")
+            .setPositiveButton("删除") { _, _ ->
+                store.clear()
+                refreshHistory()
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private fun toast(message: String) {

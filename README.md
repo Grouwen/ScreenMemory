@@ -202,9 +202,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ```
 app/src/main/java/com/screenmemory/app/
-├── MainActivity.kt                  权限流程 + 配置界面
-├── HistoryActivity.kt               对话历史列表（App 内页面）
-├── HistoryDetailActivity.kt         单段对话的完整问答
+├── MainActivity.kt                  权限流程 + 配置界面（顶部 Tab：主功能 / 对话历史）
+├── HistoryDetailActivity.kt         单段对话的完整问答，可继续追问
 ├── Prefs.kt                         配置存取
 ├── chat/
 │   └── ChatStore.kt                 多轮对话的本地记录（ChatTurn / Conversation / JSON 落盘）
@@ -313,8 +312,11 @@ H.264 不能从任意帧开始解码，所以导出会向前找到最近的一�
 `filesDir/chat_history.json`，一段对话一条记录（id = 冻结时刻），只留最近 30 段、每段 20 轮；
 写盘是「临时文件 + rename」，进程被杀也不会留下半截 JSON。
 
-**看历史在 App 里，不在悬浮窗里**：入口在首页**顶部**（大标题右边的「对话历史（N）」按钮），和下面的启动/停止、参数配置分成两块。
-点进去是 [HistoryActivity](app/src/main/java/com/screenmemory/app/HistoryActivity.kt)：列表每段一张卡片（时间 · 轮数 · 首个问题 · 最后回答摘要），右上角「清空」。
+**看历史在 App 里，和主功能平级**：首页顶部是两个 Tab —— **主功能 / 对话历史**，平级切换，悬浮窗里不承担历史浏览。
+
+- 「主功能」= 运行状态 + 全部录制/接口配置；
+- 「对话历史」= 每段一张卡片（时间 · 轮数 · 首个问题 · 最后回答摘要），右上角「清空」；
+- 点一段进 [HistoryDetailActivity](app/src/main/java/com/screenmemory/app/HistoryDetailActivity.kt) 看全文并可以**接着聊**。
 
 **历史对话可以接着聊**：[HistoryDetailActivity](app/src/main/java/com/screenmemory/app/HistoryDetailActivity.kt) 底部有输入框，
 新问题会带着这段对话的历史（最近 10 轮）发给模型，回答流式写入、完成后追加到同一段并落盘，回到列表能看到轮数变了。
