@@ -17,7 +17,9 @@ import java.io.File
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import android.os.SystemClock
 import android.util.Base64
+import android.util.Log
 
 /**
  * 千问（阿里云百炼）视频理解。严格按两份官方文档实现：
@@ -46,6 +48,9 @@ class QwenVideoClient(private val prefs: Prefs) {
 
         /** 文档：Base64 内联要求原始文件小于 7MB */
         const val BASE64_MAX_BYTES = 7L * 1024 * 1024
+
+        /** 和 CaptureService 的计时日志同一个 TAG，`adb logcat -s Timing` 一起看 */
+        const val TIMING_TAG = "Timing"
     }
 
     private class UploadPolicy(
@@ -87,15 +92,38 @@ class QwenVideoClient(private val prefs: Prefs) {
 
         // 已经开始吐字了就不能再降级重试，否则用户会看到两份答案
         var emitted = false
+        val t0 = SystemClock.elapsedRealtime()
+        var uploadDoneAt = 0L
+        var firstDeltaAt = 0L
+        var sentVia = "video"
         val forward: (String) -> Unit = { delta ->
+            if (firstDeltaAt == 0L) firstDeltaAt = SystemClock.elapsedRealtime()
             emitted = true
             onDelta(delta)
+        }
+
+        // 上传和「模型出字」混在一起看不出谁慢，这里分开记
+        fun reportPhases() {
+            val now = SystemClock.elapsedRealtime()
+            val up = if (uploadDoneAt > 0) uploadDoneAt - t0 else -1L
+            val ttft = if (firstDeltaAt > 0) firstDeltaAt - t0 else -1L
+            val mb = (video?.length() ?: 0L) / 1024.0 / 1024.0
+            Log.i(
+                TIMING_TAG,
+                "视频[$sentVia] 上传=%dms 首字=%dms 总=%dms 片段=%.1fMB 上传速率=%.1fMbps".format(
+                    up, ttft, now - t0, mb,
+                    if (up > 0) mb * 8 / (up / 1000.0) else 0.0
+                )
+            )
         }
 
         // 追问：只带文字历史，不重新上传
         if (!useVideo || video == null) {
             onStatus("追问中（沿用上一轮的画面）…")
-            return chat(key, null, question, systemPrompt, history, forward)
+            sentVia = "text"
+            val answer = chat(key, null, question, systemPrompt, history, forward)
+            reportPhases()
+            return answer
         }
 
         onStatus("正在申请上传凭证…")
@@ -105,11 +133,15 @@ class QwenVideoClient(private val prefs: Prefs) {
         } catch (t: Throwable) {
             null.also { lastUploadError = t }
         }
+        uploadDoneAt = SystemClock.elapsedRealtime()
 
         if (ossUrl != null) {
+            sentVia = "oss"
             onStatus("模型正在看这段视频…")
             try {
-                return chat(key, ossUrl, question, systemPrompt, history, forward)
+                val answer = chat(key, ossUrl, question, systemPrompt, history, forward)
+                reportPhases()
+                return answer
             } catch (t: Throwable) {
                 if (emitted) throw t
                 lastUploadError = t
@@ -117,10 +149,13 @@ class QwenVideoClient(private val prefs: Prefs) {
         }
 
         if (video.length() < BASE64_MAX_BYTES) {
+            sentVia = "base64"
             onStatus("改用 base64 内联重试…")
-            return chat(
+            val answer = chat(
                 key, "data:video/mp4;base64," + base64(video), question, systemPrompt, history, forward
             )
+            reportPhases()
+            return answer
         }
 
         val reason = lastUploadError?.message?.take(200).orEmpty()
