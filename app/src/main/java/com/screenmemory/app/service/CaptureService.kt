@@ -387,36 +387,38 @@ class CaptureService : Service(), OverlayController.Listener {
 
         // 本地识别和自录音是互斥的：SpeechRecognizer 自己占麦克风
         val cloudAllowed = canUseCloudAsr()
-        val offlineOnly = !cloudAllowed
-        val localAvailable = SpeechTranscriber.isAvailable(this, offlineOnly)
+        val systemOnly = !cloudAllowed
+        val localAvailable = SpeechTranscriber.isAvailable(this)
+        val onDevice = SpeechTranscriber.isOnDeviceAvailable(this)
         val wantLocal = localAvailable && (
-            offlineOnly || (prefs.preferLocalAsr && !localSpeechFailed)
+            systemOnly || (prefs.preferLocalAsr && !localSpeechFailed)
         )
         if (wantLocal) {
-            val engine = SpeechTranscriber(this, offlineOnly)
+            val engine = SpeechTranscriber(this)
             if (engine.start({ partial -> overlay?.setStatus("识别中：$partial") })) {
                 speech = engine
                 usingLocalSpeech = true
-                overlay?.setStatus("正在听…（系统离线识别）说完松手")
+                val mode = if (onDevice) "系统离线识别" else "系统语音识别（离线优先）"
+                overlay?.setStatus("正在听…（$mode）说完松手")
                 return
             }
             localSpeechFailed = true
-            if (offlineOnly) {
+            if (systemOnly) {
                 overlay?.setStatus(
                     if (cloudSpeechFailedForSession) {
-                        "云端识别本次已停用，本机离线识别启动失败，请直接打字"
+                        "云端识别本次已停用，系统语音识别启动失败，请直接打字"
                     } else {
-                        "未配置云端语音 API Key，本机离线识别启动失败，请直接打字"
+                        "未配置云端语音 API Key，系统语音识别启动失败，请直接打字"
                     }
                 )
                 return
             }
-        } else if (offlineOnly) {
+        } else if (systemOnly) {
             overlay?.setStatus(
                 if (cloudSpeechFailedForSession) {
-                    "云端识别本次已停用，本机系统离线识别不可用，请直接打字"
+                    "云端识别本次已停用，系统语音识别不可用，请直接打字"
                 } else {
-                    "未配置云端语音 API Key，本机系统离线识别不可用，请直接打字"
+                    "未配置云端语音 API Key，系统语音识别不可用，请直接打字"
                 }
             )
             return
@@ -452,9 +454,9 @@ class CaptureService : Service(), OverlayController.Listener {
                             canUseCloudAsr() ->
                                 "本地识别没有结果，下次按住时将尝试云端识别"
                             cloudSpeechFailedForSession ->
-                                "云端识别本次已停用，本地也没有识别出内容，请重试或直接打字"
+                                "云端识别本次已停用，系统语音识别也没有返回内容，请重试或直接打字"
                             else ->
-                                "本机离线识别没有结果；未配置云端语音 API Key，请重试或直接打字"
+                                "系统语音识别没有返回内容；未配置云端语音 API Key，请重试或直接打字"
                         }
                     )
                 } else {
@@ -490,7 +492,8 @@ class CaptureService : Service(), OverlayController.Listener {
                 Log.e(TAG, "cloud speech transcription failed", t)
                 cloudSpeechFailedForSession = true
                 overlay?.setStatus(
-                    "云端语音识别出现问题，本次只用本地识别；请再按住说一次，下次启动助手时恢复云端"
+                    "云端语音识别出现问题，本次只用系统语音（离线优先）；" +
+                        "请再按住说一次，下次启动助手时恢复云端"
                 )
             }
         }
