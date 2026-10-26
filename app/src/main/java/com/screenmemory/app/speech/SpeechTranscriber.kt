@@ -22,7 +22,10 @@ import android.util.Log
  * 1. 国产 ROM 经常没有可用引擎，`isRecognitionAvailable()` 会返回 false —— 上层要能回退云端；
  * 2. 它自己开麦克风，所以同一时刻不能再用自己的 AudioRecord 录音。
  */
-class SpeechTranscriber(private val context: Context) {
+class SpeechTranscriber(
+    private val context: Context,
+    private val offlineOnly: Boolean = false
+) {
 
     companion object {
         private const val TAG = "SpeechTranscriber"
@@ -30,8 +33,13 @@ class SpeechTranscriber(private val context: Context) {
         /** 说完之后最多等多久，超时就当没结果 */
         private const val STOP_TIMEOUT_MS = 4000L
 
-        fun isAvailable(context: Context): Boolean = try {
-            SpeechRecognizer.isRecognitionAvailable(context)
+        fun isAvailable(context: Context, offlineOnly: Boolean = false): Boolean = try {
+            if (offlineOnly) {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+            } else {
+                SpeechRecognizer.isRecognitionAvailable(context)
+            }
         } catch (t: Throwable) {
             Log.w(TAG, "isRecognitionAvailable failed", t)
             false
@@ -140,7 +148,7 @@ class SpeechTranscriber(private val context: Context) {
         ) {
             SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
         } else {
-            SpeechRecognizer.createSpeechRecognizer(context)
+            if (offlineOnly) null else SpeechRecognizer.createSpeechRecognizer(context)
         }
     } catch (t: Throwable) {
         Log.w(TAG, "createSpeechRecognizer failed", t)

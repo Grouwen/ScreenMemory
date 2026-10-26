@@ -105,6 +105,9 @@ class CaptureService : Service(), OverlayController.Listener {
     /** 本回合本地识别失败过，就暂时全部走云端，避免每次都要失败一次 */
     private var localSpeechFailed = false
 
+    /** 本次助手运行期间云端转写出错后，锁定为本地识别；重新启动助手时恢复。 */
+    private var cloudSpeechFailedForSession = false
+
     /** 本地对话记录（filesDir/chat_history.json） */
     private val chatStore by lazy { ChatStore(this) }
 
@@ -223,6 +226,7 @@ class CaptureService : Service(), OverlayController.Listener {
 
     private fun beginCapture(resultCode: Int, data: Intent) {
         if (ready) return
+        cloudSpeechFailedForSession = false
         val manager = getSystemService(MediaProjectionManager::class.java)
         val proj = try {
             manager.getMediaProjection(resultCode, data)
@@ -382,10 +386,14 @@ class CaptureService : Service(), OverlayController.Listener {
         if (!ready || asking) return
 
         // 本地识别和自录音是互斥的：SpeechRecognizer 自己占麦克风
-        val wantLocal = prefs.preferLocalAsr && !localSpeechFailed &&
-            SpeechTranscriber.isAvailable(this)
+        val cloudAllowed = canUseCloudAsr()
+        val offlineOnly = !cloudAllowed
+        val localAvailable = SpeechTranscriber.isAvailable(this, offlineOnly)
+        val wantLocal = localAvailable && (
+            offlineOnly || (prefs.preferLocalAsr && !localSpeechFailed)
+        )
         if (wantLocal) {
-            val engine = SpeechTranscriber(this)
+            val engine = SpeechTranscriber(this, offlineOnly)
             if (engine.start({ partial -> overlay?.setStatus("识别中：$partial") })) {
                 speech = engine
                 usingLocalSpeech = true
@@ -393,6 +401,25 @@ class CaptureService : Service(), OverlayController.Listener {
                 return
             }
             localSpeechFailed = true
+            if (offlineOnly) {
+                overlay?.setStatus(
+                    if (cloudSpeechFailedForSession) {
+                        "云端识别本次已停用，本机离线识别启动失败，请直接打字"
+                    } else {
+                        "未配置云端语音 API Key，本机离线识别启动失败，请直接打字"
+                    }
+                )
+                return
+            }
+        } else if (offlineOnly) {
+            overlay?.setStatus(
+                if (cloudSpeechFailedForSession) {
+                    "云端识别本次已停用，本机系统离线识别不可用，请直接打字"
+                } else {
+                    "未配置云端语音 API Key，本机系统离线识别不可用，请直接打字"
+                }
+            )
+            return
         }
 
         usingLocalSpeech = false
@@ -419,9 +446,17 @@ class CaptureService : Service(), OverlayController.Listener {
             overlay?.setStatus("正在识别…")
             engine.stop { text ->
                 if (text.isNullOrBlank()) {
-                    // 本地拿不到结果：本回合切回云端，避免反复失败
                     localSpeechFailed = true
-                    overlay?.setStatus("本地识别没有结果（机型不支持或没装离线包），已切回云端，请再按住说一次")
+                    overlay?.setStatus(
+                        when {
+                            canUseCloudAsr() ->
+                                "本地识别没有结果，下次按住时将尝试云端识别"
+                            cloudSpeechFailedForSession ->
+                                "云端识别本次已停用，本地也没有识别出内容，请重试或直接打字"
+                            else ->
+                                "本机离线识别没有结果；未配置云端语音 API Key，请重试或直接打字"
+                        }
+                    )
                 } else {
                     overlay?.setRecognized(MathSpeech.normalize(text))
                     overlay?.setStatus("文字已就绪（本地识别），改好点“发送”")
@@ -452,10 +487,20 @@ class CaptureService : Service(), OverlayController.Listener {
                     overlay?.setStatus("文字已就绪，改好点“发送”")
                 }
             } catch (t: Throwable) {
-                overlay?.setStatus("转写失败：${t.message}")
+                Log.e(TAG, "cloud speech transcription failed", t)
+                cloudSpeechFailedForSession = true
+                overlay?.setStatus(
+                    "云端语音识别出现问题，本次只用本地识别；请再按住说一次，下次启动助手时恢复云端"
+                )
             }
         }
     }
+
+    /** 云端转写必须有 Key 和完整 URL；缺任意一项都强制走系统离线识别。 */
+    private fun canUseCloudAsr(): Boolean =
+        !cloudSpeechFailedForSession &&
+            prefs.asrKey().isNotBlank() &&
+            prefs.asrEndpoint().isNotBlank()
 
     override fun onSend(text: String) {
         val question = text.trim()
