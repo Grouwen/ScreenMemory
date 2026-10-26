@@ -59,7 +59,7 @@ class SpeechTranscriber(private val context: Context) {
         engine.setRecognitionListener(object : RecognitionListener {
             override fun onPartialResults(partialResults: Bundle?) {
                 val text = firstResult(partialResults)
-                if (!text.isNullOrBlank()) onPartial(text)
+                if (!text.isNullOrBlank()) onPartial(MathSpeech.normalize(text))
             }
 
             override fun onResults(results: Bundle?) {
@@ -88,6 +88,14 @@ class SpeechTranscriber(private val context: Context) {
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            putStringArrayListExtra(
+                RecognizerIntent.EXTRA_BIASING_STRINGS,
+                ArrayList(MathSpeech.biasingTerms)
+            )
+            putExtra(
+                RecognizerIntent.EXTRA_ENABLE_FORMATTING,
+                RecognizerIntent.FORMATTING_OPTIMIZE_LATENCY
+            )
         }
         return try {
             engine.startListening(intent)

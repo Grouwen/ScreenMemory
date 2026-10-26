@@ -297,6 +297,8 @@ H.264 不能从任意帧开始解码，所以导出会向前找到最近的一�
 
 另外，本地识别先结束时可能拿不到结果：`SpeechTranscriber` 里用 `finished` + `finishedResult` 兜住"松手前会话已结束"的情况，否则面板会一直停在「正在识别…」。
 
+数学语音输入会通过 `RecognizerIntent.EXTRA_BIASING_STRINGS` 向系统识别器提供「判别式、定义域、等差数列、韦达定理、换元法」等领域词；识别完成后再经过统一的高置信度同音校正，因此后续接入其他云端转写引擎也可以复用同一套数学词处理。
+
 **⑥ 悬浮窗里的输入框能弹出键盘。**
 悬浮窗默认 `FLAG_NOT_FOCUSABLE`，键盘弹不出来。提问面板改成可聚焦窗口 + `SOFT_INPUT_ADJUST_RESIZE`，同时在面板显示时不主动抢焦点，避免一点开就弹键盘挡住内容。悬浮球用 `FLAG_NOT_FOCUSABLE | FLAG_LAYOUT_NO_LIMITS`，保证不拦截下层 App 的触摸，只在小球自身上响应拖动/点击。
 

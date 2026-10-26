@@ -40,6 +40,7 @@ import com.screenmemory.app.chat.Conversation
 import com.screenmemory.app.net.LlmClient
 import com.screenmemory.app.net.QwenVideoClient
 import com.screenmemory.app.overlay.OverlayController
+import com.screenmemory.app.speech.MathSpeech
 import com.screenmemory.app.speech.SpeechTranscriber
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -422,7 +423,7 @@ class CaptureService : Service(), OverlayController.Listener {
                     localSpeechFailed = true
                     overlay?.setStatus("本地识别没有结果（机型不支持或没装离线包），已切回云端，请再按住说一次")
                 } else {
-                    overlay?.setRecognized(text)
+                    overlay?.setRecognized(MathSpeech.normalize(text))
                     overlay?.setStatus("文字已就绪（本地识别），改好点“发送”")
                 }
             }
@@ -447,7 +448,7 @@ class CaptureService : Service(), OverlayController.Listener {
                 if (text.isBlank()) {
                     overlay?.setStatus("没听清，可以重说或直接打字")
                 } else {
-                    overlay?.setRecognized(text)
+                    overlay?.setRecognized(MathSpeech.normalize(text))
                     overlay?.setStatus("文字已就绪，改好点“发送”")
                 }
             } catch (t: Throwable) {
