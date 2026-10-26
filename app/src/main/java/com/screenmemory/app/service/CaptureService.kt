@@ -230,13 +230,19 @@ class CaptureService : Service(), OverlayController.Listener {
 
         // 只采应用内播放的声音（回放捕获），不再提供麦克风选项
         val sampleRate = AudioHub.PLAYBACK_SAMPLE_RATE
+        val bitRate = if (maxOf(width, height) >= 640) quality.videoBitRate else 2_000_000
+        // 打出来是为了排查「明明选了省流，导出的片段却很大」：确认档位真的生效了
+        Log.i(
+            TIMING_TAG,
+            "录制参数 档位=${quality.name} ${width}x$height ${bitRate / 1000}kbps fps=20 窗口=${prefs.clipSeconds}s"
+        )
         val rec = ScreenRingRecorder(
             projection = proj,
             width = width,
             height = height,
             dpi = metrics.densityDpi,
             audioSampleRate = sampleRate,
-            bitRate = if (maxOf(width, height) >= 640) quality.videoBitRate else 2_000_000,
+            bitRate = bitRate,
             fps = 20,
             windowSeconds = prefs.clipSeconds
         )
@@ -515,10 +521,19 @@ class CaptureService : Service(), OverlayController.Listener {
         val frames = prepared?.frames.orEmpty()
         val uploadKb = frames.sumOf { it.length.toLong() } * 3 / 4 / 1024
         val ttft = if (firstTokenAt > 0) firstTokenAt - preparedAt else -1L
+        // 片段体积 / 实测码率：视频直传时这两个数才是真正上传的量
+        val clipMb = (prepared?.file?.length() ?: 0L) / 1024.0 / 1024.0
+        val actualMbps = if (prepared != null && prepared.durationMs > 0) {
+            prepared.file.length() * 8.0 / (prepared.durationMs / 1000.0) / 1_000_000.0
+        } else {
+            0.0
+        }
         Log.i(
             TIMING_TAG,
             "准备=${preparedAt - startedAt}ms 首字=${ttft}ms 总=${now - preparedAt}ms " +
-                "帧=${frames.size} 上传≈${uploadKb}KB 历史轮=$historyTurns 首轮=$firstTurn"
+                "帧=${frames.size} 上传≈${uploadKb}KB " +
+                "片段=%.1fMB/%.1fs/%.1fMbps 历史轮=$historyTurns 首轮=$firstTurn"
+                    .format(clipMb, (prepared?.durationMs ?: 0L) / 1000.0, actualMbps)
         )
     }
 

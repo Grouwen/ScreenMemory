@@ -110,7 +110,10 @@ class ScreenRingRecorder(
     }
 
     private fun startVideo() {
-        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
+        val mime = MediaFormat.MIMETYPE_VIDEO_AVC
+        // 硬编码器默认多为 VBR：屏幕内容一变多，实际码率能飙到设定值的 2–5 倍，
+        // 直接后果就是「省流 15 秒」导出 20MB+。支持 CBR 的机型强制走 CBR 压住上限。
+        val format = MediaFormat.createVideoFormat(mime, width, height).apply {
             setInteger(
                 MediaFormat.KEY_COLOR_FORMAT,
                 MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
@@ -119,7 +122,23 @@ class ScreenRingRecorder(
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
         }
-        val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+        val codec = MediaCodec.createEncoderByType(mime)
+        val useCbr = try {
+            codec.codecInfo.getCapabilitiesForType(mime).encoderCapabilities
+                .isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
+        } catch (_: Throwable) {
+            false
+        }
+        if (useCbr) {
+            format.setInteger(
+                MediaFormat.KEY_BITRATE_MODE,
+                MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+            )
+        }
+        Log.i(
+            TAG,
+            "video ${width}x$height ${bitRate / 1000}kbps ${fps}fps mode=${if (useCbr) "cbr" else "vbr(未指定)"}"
+        )
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         val surface = codec.createInputSurface()
         codec.start()
