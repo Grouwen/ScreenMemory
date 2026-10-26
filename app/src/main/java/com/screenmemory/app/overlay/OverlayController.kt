@@ -72,8 +72,11 @@ class OverlayController(
 
     private var statusView: TextView? = null
     private var warningView: TextView? = null
-    private var answerView: TextView? = null
+    private var messageList: LinearLayout? = null
     private var answerScroll: ScrollView? = null
+    private var pendingAnswerView: TextView? = null
+    private var renderedTurns: List<ChatTurn> = emptyList()
+    private var renderedPendingQuestion: String? = null
     private var inputView: EditText? = null
     private var holdView: TextView? = null
     private var sendView: TextView? = null
@@ -445,8 +448,11 @@ class OverlayController(
     private fun clearViewRefs() {
         statusView = null
         warningView = null
-        answerView = null
+        messageList = null
         answerScroll = null
+        pendingAnswerView = null
+        renderedTurns = emptyList()
+        renderedPendingQuestion = null
         inputView = null
         holdView = null
         sendView = null
@@ -551,14 +557,6 @@ class OverlayController(
         warningView = warning
         root.addView(warning)
 
-        val answerText = TextView(themedContext).apply {
-            setTextColor(0xFF12131A.toInt())
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            setLineSpacing(dp(4).toFloat(), 1f)
-            setTextIsSelectable(true)
-        }
-        answerView = answerText
-
         val answerBox = ScrollView(context).apply {
             visibility = View.GONE
             setBackgroundColor(0x00000000)
@@ -567,7 +565,11 @@ class OverlayController(
                 dp(190)
             ).apply { bottomMargin = dp(8) }
             addView(
-                answerText,
+                LinearLayout(context).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(0, dp(2), 0, dp(4))
+                    this@OverlayController.messageList = this
+                },
                 FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT
@@ -705,42 +707,112 @@ class OverlayController(
         pendingAnswer: String? = null
     ) {
         main.post {
-            val view = answerView ?: return@post
+            val messages = messageList ?: return@post
             val scroll = answerScroll ?: return@post
-            val markdown = buildTranscriptMarkdown(turns, pendingQuestion, pendingAnswer)
-            if (markdown.isBlank()) {
-                view.text = ""
+            val snapshot = turns.toList()
+            if (snapshot.isEmpty() && pendingQuestion == null) {
+                messages.removeAllViews()
+                pendingAnswerView = null
+                renderedTurns = emptyList()
+                renderedPendingQuestion = null
                 scroll.visibility = View.GONE
                 return@post
             }
-            if (pendingQuestion != null) {
-                // 流式阶段整段走纯文本，避免半截公式把渲染器炸掉
-                view.text = Preview.plain(markdown)
-            } else {
-                renderMarkdown(view, markdown)
+            val structureChanged =
+                snapshot != renderedTurns || pendingQuestion != renderedPendingQuestion
+            if (structureChanged) {
+                messages.removeAllViews()
+                pendingAnswerView = null
+                for (turn in snapshot) {
+                    addMessage(turn.question, isUser = true)
+                    addMessage(turn.answer, isUser = false)
+                }
+                if (pendingQuestion != null) {
+                    addMessage(pendingQuestion, isUser = true)
+                    pendingAnswerView = addMessage(
+                        pendingAnswer.orEmpty(),
+                        isUser = false,
+                        streaming = true
+                    )
+                }
+                renderedTurns = snapshot
+                renderedPendingQuestion = pendingQuestion
+            } else if (pendingQuestion != null) {
+                pendingAnswerView?.text = Preview.plain(
+                    pendingAnswer.orEmpty().ifBlank { "正在等待回答…" }
+                )
             }
             scroll.visibility = View.VISIBLE
             scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
         }
     }
 
-    private fun buildTranscriptMarkdown(
-        turns: List<ChatTurn>,
-        pendingQuestion: String?,
-        pendingAnswer: String?
-    ): String {
-        val sb = StringBuilder()
-        turns.forEachIndexed { index, turn ->
-            if (index > 0) sb.append("\n\n---\n\n")
-            sb.append("**你**：").append(turn.question).append("\n\n")
-            sb.append("**答**：").append(turn.answer)
+    private fun addMessage(
+        message: String,
+        isUser: Boolean,
+        streaming: Boolean = false
+    ): TextView {
+        val messages = messageList ?: error("message list not initialized")
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = if (isUser) Gravity.END else Gravity.START
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8) }
         }
-        if (pendingQuestion != null) {
-            if (turns.isNotEmpty()) sb.append("\n\n---\n\n")
-            sb.append("**你**：").append(pendingQuestion).append("\n\n")
-            sb.append("**答**：").append(pendingAnswer.orEmpty())
+        val column = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = if (isUser) Gravity.END else Gravity.START
         }
-        return sb.toString()
+        val role = TextView(context).apply {
+            text = if (isUser) "你" else "AI 助手"
+            setTextColor(0xFF8A8F9C.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
+            setPadding(dp(4), 0, dp(4), dp(2))
+        }
+        val bubble = TextView(themedContext).apply {
+            maxWidth = minOf(metrics.widthPixels - dp(64), dp(420)).coerceAtLeast(dp(180))
+            setTextIsSelectable(true)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+            setLineSpacing(dp(3).toFloat(), 1f)
+            setPadding(dp(13), dp(9), dp(13), dp(9))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(17).toFloat()
+                setColor(if (isUser) 0xFF2F6BFF.toInt() else 0xFFF2F3F7.toInt())
+            }
+            setTextColor(if (isUser) Color.WHITE else 0xFF12131A.toInt())
+            if (isUser || streaming) {
+                text = Preview.plain(
+                    if (streaming && message.isBlank()) "正在等待回答…" else message
+                )
+            } else {
+                renderMarkdown(this, message)
+            }
+        }
+        column.addView(
+            role,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+        column.addView(
+            bubble,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+        row.addView(
+            column,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+        messages.addView(row)
+        return bubble
     }
 
     /** 渲染降级链：完整版 → 无公式版 → 纯文本，任何一级失败都不能让答案消失 */
