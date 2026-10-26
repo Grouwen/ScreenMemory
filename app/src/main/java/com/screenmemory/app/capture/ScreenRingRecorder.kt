@@ -15,21 +15,24 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.util.ArrayDeque
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.Executors
 
 /**
  * 屏幕“时光机”录制器。
  *
  * 用 MediaCodec 直接把 VirtualDisplay 的画面编成 H.264、把 PCM 编成 AAC，
  * 编码后的帧放进内存环形缓冲（按时间窗口裁剪），不落盘、不停止编码。
- * 用户提问时把缓冲区里最近 N 秒的帧重新封装成一个 MP4。
+ * 用户提问时把缓冲区里最近 N 秒的帧重新封装成 MP4；屏幕旋转会按方向分段，
+ * 因为单个 MP4 视频轨不能中途改变分辨率。
  */
 class ScreenRingRecorder(
     private val projection: MediaProjection,
     private val width: Int,
     private val height: Int,
-    private val dpi: Int,
+    dpi: Int,
     private val audioSampleRate: Int,
     private val audioChannels: Int = 1,
     private val bitRate: Int = 3_000_000,
@@ -63,13 +66,47 @@ class ScreenRingRecorder(
         val sizeBytes: Long,
         val message: String = "",
         /** 片段内音频的峰值（0–32767）；全 0 说明只有静音，通常是被目标 App 屏蔽了内录 */
-        val audioPeak: Int = 0
+        val audioPeak: Int = 0,
+        /**
+         * 视频直传时，窗口里还有旋转前 / 其他尺寸的画面，但 MP4 无法混轨。
+         * 这种情况下只导出了最新方向，调用方需要提示用户片段被缩短了。
+         */
+        val rotationTrimmed: Boolean = false
     )
 
     private class AudioPeak(val ptsUs: Long, val value: Int)
 
+    /** 已经结束采集的一段视频。旋转屏幕会封存当前段，新方向写进新段。 */
+    private class VideoSegment(
+        val width: Int,
+        val height: Int,
+        val frames: ArrayList<Frame> = ArrayList(),
+        var csd0: ByteBuffer? = null,
+        var csd1: ByteBuffer? = null
+    )
+
+    class ClipPart(val file: File, val result: ClipResult)
+
+    private class ExportPiece(
+        val width: Int,
+        val height: Int,
+        val frames: List<Frame>,
+        val csd0: ByteBuffer?,
+        val csd1: ByteBuffer?
+    )
+
+    private class ExportState(
+        val pieces: List<ExportPiece>,
+        val audio: List<Frame>,
+        val peaks: List<AudioPeak>,
+        val audioCsd: ByteBuffer?,
+        val endUs: Long,
+        val activeVideoEmpty: Boolean
+    )
+
     private val lock = Any()
     private val videoFrames = ArrayDeque<Frame>()
+    private val archivedSegments = ArrayDeque<VideoSegment>()
     private val audioFrames = ArrayDeque<Frame>()
 
     /** 与音频帧同步推进的峰值记录，用来判断「采到的到底是不是静音」 */
@@ -79,6 +116,15 @@ class ScreenRingRecorder(
     /** 非 null 表示窗口已冻结，此刻的 pts 就是片段的终点；期间新帧一律丢弃 */
     @Volatile
     private var frozenEndUs: Long? = null
+
+    @Volatile
+    private var currentWidth = width
+
+    @Volatile
+    private var currentHeight = height
+
+    @Volatile
+    private var currentDpi = dpi
 
     private var videoCsd0: ByteBuffer? = null
     private var videoCsd1: ByteBuffer? = null
@@ -90,16 +136,21 @@ class ScreenRingRecorder(
     private var virtualDisplay: VirtualDisplay? = null
 
     private val running = AtomicBoolean(false)
+    private val videoRunning = AtomicBoolean(false)
     private var videoThread: Thread? = null
     private var audioThread: Thread? = null
     private val audioQueue = LinkedBlockingQueue<Frame>()
+    private val videoLifecycleLock = Any()
+    private val videoControl = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "video-control")
+    }
 
     // ---------------------------------------------------------------- 生命周期
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
         try {
-            startVideo()
+            synchronized(videoLifecycleLock) { startVideo() }
             startAudio()
         } catch (t: Throwable) {
             Log.e(TAG, "start failed", t)
@@ -109,11 +160,50 @@ class ScreenRingRecorder(
         }
     }
 
+    /**
+     * 屏幕旋转或尺寸变化时调用。
+     *
+     * 旧段先封存，再重建虚拟屏和视频编码器。音频编码器、AudioHub 和已有音频帧
+     * 都保持不动，所以不会把环境音 / 网课声音切断。
+     */
+    fun switchVideoGeometry(width: Int, height: Int, dpi: Int) {
+        if (width < 160 || height < 160 || !running.get()) return
+        try {
+            videoControl.execute {
+                synchronized(videoLifecycleLock) {
+                    if (!running.get() ||
+                        (currentWidth == width && currentHeight == height && currentDpi == dpi)
+                    ) {
+                        return@synchronized
+                    }
+                    Log.i(TAG, "rotate video ${currentWidth}x$currentHeight -> ${width}x$height")
+                    stopVideoPipeline(releaseDisplay = false)
+                    synchronized(lock) {
+                        archiveCurrentVideoLocked()
+                        currentWidth = width
+                        currentHeight = height
+                        currentDpi = dpi
+                    }
+                    try {
+                        startVideo()
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "restart video after rotation failed", t)
+                        stopVideoPipeline(releaseDisplay = false)
+                    }
+                }
+            }
+        } catch (_: RejectedExecutionException) {
+            // 服务正在释放，最后一帧方向变化可以安全忽略。
+        }
+    }
+
     private fun startVideo() {
         val mime = MediaFormat.MIMETYPE_VIDEO_AVC
         // 硬编码器默认多为 VBR：屏幕内容一变多，实际码率能飙到设定值的 2–5 倍，
         // 直接后果就是「省流 15 秒」导出 20MB+。支持 CBR 的机型强制走 CBR 压住上限。
-        val format = MediaFormat.createVideoFormat(mime, width, height).apply {
+        val videoWidth = currentWidth
+        val videoHeight = currentHeight
+        val format = MediaFormat.createVideoFormat(mime, videoWidth, videoHeight).apply {
             setInteger(
                 MediaFormat.KEY_COLOR_FORMAT,
                 MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
@@ -137,7 +227,7 @@ class ScreenRingRecorder(
         }
         Log.i(
             TAG,
-            "video ${width}x$height ${bitRate / 1000}kbps ${fps}fps mode=${if (useCbr) "cbr" else "vbr(未指定)"}"
+            "video ${videoWidth}x$videoHeight ${bitRate / 1000}kbps ${fps}fps mode=${if (useCbr) "cbr" else "vbr(未指定)"}"
         )
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         val surface = codec.createInputSurface()
@@ -145,17 +235,26 @@ class ScreenRingRecorder(
         videoCodec = codec
         inputSurface = surface
 
-        virtualDisplay = projection.createVirtualDisplay(
-            "screen-memory",
-            width,
-            height,
-            dpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            surface,
-            null,
-            Handler(Looper.getMainLooper())
-        )
+        val display = virtualDisplay
+        if (display == null) {
+            // MediaProjection 在 targetSdk 34 上只允许创建一次 VirtualDisplay。
+            // 后续旋转必须复用这个实例，通过 resize + setSurface 更新。
+            virtualDisplay = projection.createVirtualDisplay(
+                "screen-memory",
+                videoWidth,
+                videoHeight,
+                currentDpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                surface,
+                null,
+                Handler(Looper.getMainLooper())
+            ) ?: throw IllegalStateException("VirtualDisplay 创建失败")
+        } else {
+            display.resize(videoWidth, videoHeight, currentDpi)
+            display.setSurface(surface)
+        }
 
+        videoRunning.set(true)
         videoThread = Thread({ videoLoop(codec) }, "video-drain").also { it.start() }
     }
 
@@ -179,38 +278,55 @@ class ScreenRingRecorder(
 
     fun release() {
         running.set(false)
-        try {
-            virtualDisplay?.release()
-        } catch (t: Throwable) {
-            Log.w(TAG, "release display", t)
-        }
-        virtualDisplay = null
-        try {
-            videoThread?.join(800)
-        } catch (_: InterruptedException) {
+        videoControl.shutdownNow()
+        synchronized(videoLifecycleLock) {
+            stopVideoPipeline(releaseDisplay = true)
         }
         try {
             audioThread?.join(800)
         } catch (_: InterruptedException) {
         }
-        videoThread = null
         audioThread = null
-        try {
-            inputSurface?.release()
-        } catch (_: Throwable) {
-        }
-        inputSurface = null
         audioCodec?.let { stopQuietly(it) }
         audioCodec = null
-        videoCodec?.let { stopQuietly(it) }
-        videoCodec = null
         synchronized(lock) {
             videoFrames.clear()
+            archivedSegments.clear()
             audioFrames.clear()
             audioPeaks.clear()
             bufferedBytes = 0
         }
         audioQueue.clear()
+    }
+
+    /** 只停止视频这一路；全局 running / 音频管线保持不变。 */
+    private fun stopVideoPipeline(releaseDisplay: Boolean) {
+        videoRunning.set(false)
+        try {
+            virtualDisplay?.setSurface(null)
+        } catch (t: Throwable) {
+            Log.w(TAG, "detach display surface", t)
+        }
+        if (releaseDisplay) {
+            try {
+                virtualDisplay?.release()
+            } catch (t: Throwable) {
+                Log.w(TAG, "release display", t)
+            }
+            virtualDisplay = null
+        }
+        try {
+            videoThread?.join(800)
+        } catch (_: InterruptedException) {
+        }
+        videoThread = null
+        try {
+            inputSurface?.release()
+        } catch (_: Throwable) {
+        }
+        inputSurface = null
+        videoCodec?.let { stopQuietly(it) }
+        videoCodec = null
     }
 
     private fun stopQuietly(codec: MediaCodec) {
@@ -228,13 +344,17 @@ class ScreenRingRecorder(
 
     private fun videoLoop(codec: MediaCodec) {
         val info = MediaCodec.BufferInfo()
-        while (running.get()) {
+        while (running.get() && videoRunning.get()) {
             try {
                 when (val index = codec.dequeueOutputBuffer(info, 10_000L)) {
                     MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                         val out = codec.outputFormat
-                        videoCsd0 = out.getByteBuffer("csd-0")?.duplicate()
-                        videoCsd1 = out.getByteBuffer("csd-1")?.duplicate()
+                        val csd0 = out.getByteBuffer("csd-0")?.duplicate()
+                        val csd1 = out.getByteBuffer("csd-1")?.duplicate()
+                        synchronized(lock) {
+                            videoCsd0 = csd0
+                            videoCsd1 = csd1
+                        }
                     }
 
                     MediaCodec.INFO_TRY_AGAIN_LATER -> Unit
@@ -271,18 +391,61 @@ class ScreenRingRecorder(
         }
     }
 
+    /** 把当前方向缓冲封存成独立视频段，供抽帧模式合并、视频模式判定截断。 */
+    private fun archiveCurrentVideoLocked() {
+        if (videoFrames.isNotEmpty()) {
+            archivedSegments.addLast(
+                VideoSegment(
+                    width = currentWidth,
+                    height = currentHeight,
+                    frames = ArrayList(videoFrames),
+                    csd0 = videoCsd0?.duplicate(),
+                    csd1 = videoCsd1?.duplicate()
+                )
+            )
+        }
+        videoFrames.clear()
+        videoCsd0 = null
+        videoCsd1 = null
+    }
+
     /** 只保留窗口时长 + 1.5 秒余量（余量用于保证有可用的关键帧起点） */
     private fun trimLocked(latestPtsUs: Long) {
         val cutoff = latestPtsUs - windowUs - 1_500_000L
-        while (videoFrames.size > 2) {
-            val head = videoFrames.peekFirst() ?: break
-            if (head.ptsUs < cutoff) {
-                videoFrames.removeFirst()
-                bufferedBytes -= head.data.size
-            } else {
-                break
+        val archivedIterator = archivedSegments.iterator()
+        while (archivedIterator.hasNext()) {
+            val segment = archivedIterator.next()
+            while (segment.frames.isNotEmpty() && segment.frames.first().ptsUs < cutoff) {
+                bufferedBytes -= segment.frames.removeAt(0).data.size
+            }
+            if (segment.frames.isEmpty()) archivedIterator.remove()
+        }
+        while (videoFrames.isNotEmpty() && videoFrames.first().ptsUs < cutoff) {
+            bufferedBytes -= videoFrames.removeFirst().data.size
+        }
+        while (audioFrames.isNotEmpty() && audioFrames.first().ptsUs < cutoff) {
+            bufferedBytes -= audioFrames.removeFirst().data.size
+        }
+        while (bufferedBytes > MAX_BUFFER_BYTES) {
+            val archivedHead = archivedSegments.firstOrNull()?.frames?.firstOrNull()?.ptsUs
+            val activeHead = videoFrames.firstOrNull()?.ptsUs
+            val audioHead = audioFrames.firstOrNull()?.ptsUs
+            val oldest = listOfNotNull(archivedHead, activeHead, audioHead).minOrNull() ?: break
+            when (oldest) {
+                archivedHead -> {
+                    val segment = archivedSegments.first()
+                    bufferedBytes -= segment.frames.removeAt(0).data.size
+                    if (segment.frames.isEmpty()) archivedSegments.removeFirst()
+                }
+                activeHead -> bufferedBytes -= videoFrames.removeFirst().data.size
+                audioHead -> bufferedBytes -= audioFrames.removeFirst().data.size
             }
         }
+    }
+
+    /** 音频时间戳持续前进，但静止画面可能很久不产视频帧，音频也要独立裁剪。 */
+    private fun trimAudioLocked(latestPtsUs: Long) {
+        val cutoff = latestPtsUs - windowUs - 1_500_000L
         while (audioFrames.size > 2) {
             val head = audioFrames.peekFirst() ?: break
             if (head.ptsUs < cutoff) {
@@ -291,10 +454,6 @@ class ScreenRingRecorder(
             } else {
                 break
             }
-        }
-        while (bufferedBytes > MAX_BUFFER_BYTES) {
-            val v = videoFrames.pollFirst() ?: break
-            bufferedBytes -= v.data.size
         }
     }
 
@@ -324,7 +483,7 @@ class ScreenRingRecorder(
 
     /** 最近 [seconds] 秒内采到的音频峰值，用于「打开面板时提示当前没声音」 */
     fun recentAudioPeak(seconds: Int): Int = synchronized(lock) {
-        val end = frozenEndUs ?: videoFrames.peekLast()?.ptsUs ?: 0L
+        val end = frozenEndUs ?: latestVideoPtsLocked()
         if (end == 0L) {
             0
         } else {
@@ -378,7 +537,8 @@ class ScreenRingRecorder(
             }
             if (index == MediaCodec.INFO_TRY_AGAIN_LATER) return
             if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                audioCsd0 = codec.outputFormat.getByteBuffer("csd-0")?.duplicate()
+                val csd = codec.outputFormat.getByteBuffer("csd-0")?.duplicate()
+                synchronized(lock) { audioCsd0 = csd }
                 continue
             }
             if (index < 0) continue
@@ -393,6 +553,7 @@ class ScreenRingRecorder(
                 synchronized(lock) {
                     audioFrames.addLast(Frame(info.presentationTimeUs, info.flags, data))
                     bufferedBytes += data.size
+                    trimAudioLocked(info.presentationTimeUs)
                 }
             }
             codec.releaseOutputBuffer(index, false)
@@ -411,8 +572,10 @@ class ScreenRingRecorder(
      */
     fun freezeWindow(): Boolean = synchronized(lock) {
         if (videoFrames.size < 2) return false
-        frozenEndUs = videoFrames.peekLast()?.ptsUs
-        frozenEndUs != null
+        val end = videoFrames.peekLast()?.ptsUs ?: return false
+        if (videoFrames.none { (it.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 }) return false
+        frozenEndUs = end
+        true
     }
 
     fun unfreezeWindow() {
@@ -422,62 +585,117 @@ class ScreenRingRecorder(
     fun isFrozen(): Boolean = frozenEndUs != null
 
     /** 缓冲区里最新一帧的时间戳（微秒），空缓冲返回 0 */
-    fun latestPtsUs(): Long = synchronized(lock) { videoFrames.peekLast()?.ptsUs ?: 0L }
+    fun latestPtsUs(): Long = synchronized(lock) {
+        latestVideoPtsLocked()
+    }
+
+    private fun latestVideoPtsLocked(): Long {
+        val archived = archivedSegments.asSequence()
+            .mapNotNull { it.frames.lastOrNull()?.ptsUs }
+            .maxOrNull() ?: 0L
+        val active = videoFrames.peekLast()?.ptsUs ?: 0L
+        return maxOf(archived, active)
+    }
 
     /**
-     * 把缓冲区中最近 [windowUs] 的帧封装成 MP4。
-     * 起点会对齐到最近的关键帧（最多损失约 1 秒）。
-     * 若处于冻结状态（点了悬浮球），终点固定为冻结时刻，不包含之后的面板与键盘。
+     * 视频直传只能用一个尺寸的 MP4，所以选最新方向的一段。
+     * 如果窗口里还有旋转前的画面，[ClipResult.rotationTrimmed] 会置为 true。
      */
-    fun exportClip(outFile: File): ClipResult {
-        val videoCopy: List<Frame>
-        val audioCopy: List<Frame>
-        val peakCopy: List<AudioPeak>
-        val csd0: ByteBuffer?
-        val csd1: ByteBuffer?
-        val acsd: ByteBuffer?
-        synchronized(lock) {
-            videoCopy = ArrayList(videoFrames)
-            audioCopy = ArrayList(audioFrames)
-            peakCopy = ArrayList(audioPeaks)
-            csd0 = videoCsd0?.duplicate()
-            csd1 = videoCsd1?.duplicate()
-            acsd = audioCsd0?.duplicate()
+    fun exportLatestClip(outFile: File): ClipPart? {
+        val state = snapshotExportState()
+        val eligible = state.pieces.filter { pieceHasWindowFrames(it, state) }
+        val latest = eligible.lastOrNull() ?: return null
+        val rotationChangedMedia =
+            eligible.size > 1 || state.activeVideoEmpty || latest !== state.pieces.lastOrNull()
+        return ClipPart(outFile, exportPiece(state, latest, outFile, rotationChangedMedia))
+    }
+
+    /**
+     * 抽帧模式使用：把窗口内每个方向各导出一个小 MP4，调用方再按时间顺序合并截图。
+     */
+    fun exportRecentClips(outDir: File, prefix: String): List<ClipPart> {
+        outDir.mkdirs()
+        val state = snapshotExportState()
+        val eligible = state.pieces.filter { pieceHasWindowFrames(it, state) }
+        val result = ArrayList<ClipPart>()
+        eligible.forEachIndexed { index, piece ->
+            val file = File(outDir, "${prefix}_${index + 1}.mp4")
+            val clip = exportPiece(state, piece, file, hasEarlier = false)
+            if (clip.ok) result.add(ClipPart(file, clip))
         }
-        if (videoCopy.isEmpty()) {
-            return ClipResult(false, 0, 0, "还没录到画面，请过几秒再问")
+        return result
+    }
+
+    /** 兼容旧调用：视频直传使用最新方向。 */
+    fun exportClip(outFile: File): ClipResult =
+        exportLatestClip(outFile)?.result
+            ?: ClipResult(false, 0, 0, "还没录到画面，请过几秒再问")
+
+    private fun snapshotExportState(): ExportState = synchronized(lock) {
+        val pieces = ArrayList<ExportPiece>()
+        for (segment in archivedSegments) {
+            if (segment.frames.isNotEmpty()) {
+                pieces.add(
+                    ExportPiece(
+                        segment.width,
+                        segment.height,
+                        ArrayList(segment.frames),
+                        segment.csd0?.duplicate(),
+                        segment.csd1?.duplicate()
+                    )
+                )
+            }
+        }
+        if (videoFrames.isNotEmpty()) {
+            pieces.add(
+                ExportPiece(
+                    currentWidth,
+                    currentHeight,
+                    ArrayList(videoFrames),
+                    videoCsd0?.duplicate(),
+                    videoCsd1?.duplicate()
+                )
+            )
+        }
+        ExportState(
+            pieces = pieces,
+            audio = ArrayList(audioFrames),
+            peaks = ArrayList(audioPeaks),
+            audioCsd = audioCsd0?.duplicate(),
+            endUs = frozenEndUs ?: latestVideoPtsLocked(),
+            activeVideoEmpty = videoFrames.isEmpty() && archivedSegments.isNotEmpty()
+        )
+    }
+
+    private fun pieceHasWindowFrames(piece: ExportPiece, state: ExportState): Boolean {
+        if (state.endUs <= 0L) return false
+        val windowStart = state.endUs - windowUs
+        val last = piece.frames.lastOrNull { it.ptsUs <= state.endUs } ?: return false
+        return last.ptsUs >= windowStart && piece.frames.any {
+            it.ptsUs <= state.endUs &&
+                (it.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
+        }
+    }
+
+    private fun exportPiece(
+        state: ExportState,
+        piece: ExportPiece,
+        outFile: File,
+        hasEarlier: Boolean
+    ): ClipResult {
+        val usable = piece.frames.filter { it.ptsUs <= state.endUs }
+        if (usable.isEmpty()) {
+            return ClipResult(false, 0, 0, "冻结窗口里的画面不足，请稍后再试")
         }
 
-        // 有冻结点时，先把之后的帧（面板、键盘）丢掉
-        val cutEnd = frozenEndUs
-        val usable: List<Frame> = if (cutEnd != null) {
-            val cut = videoCopy.filter { it.ptsUs <= cutEnd }
-            if (cut.size < 2) {
-                return ClipResult(false, 0, 0, "冻结窗口里的画面不足，请稍后再试")
-            }
-            cut
-        } else {
-            videoCopy
-        }
-
-        val endPts = usable.last().ptsUs
-        val window = windowUs
-        val target = endPts - window
-        var startIndex = -1
-        for (i in usable.indices) {
-            val f = usable[i]
-            val isKey = (f.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
-            if (isKey && f.ptsUs >= target) {
-                startIndex = i
-                break
-            }
+        val target = state.endUs - windowUs
+        var startIndex = usable.indexOfFirst {
+            it.ptsUs >= target &&
+                (it.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
         }
         if (startIndex < 0) {
-            for (i in usable.indices) {
-                if ((usable[i].flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0) {
-                    startIndex = i
-                    break
-                }
+            startIndex = usable.indexOfFirst {
+                (it.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
             }
         }
         if (startIndex < 0) {
@@ -486,30 +704,29 @@ class ScreenRingRecorder(
 
         val vList = usable.subList(startIndex, usable.size)
         val base = vList[0].ptsUs
-        val aList = audioCopy.filter {
-            it.ptsUs >= base && (cutEnd == null || it.ptsUs <= cutEnd)
-        }
+        val endPts = minOf(state.endUs, usable.last().ptsUs)
+        val aList = state.audio.filter { it.ptsUs in base..endPts }
 
         outFile.parentFile?.mkdirs()
         if (outFile.exists()) outFile.delete()
 
-        var durationMs = 0L
+        var durationMs: Long
         var lastPts = base
         var muxer: MediaMuxer? = null
         try {
             muxer = MediaMuxer(outFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             val videoFormat =
-                MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height)
-            csd0?.let { videoFormat.setByteBuffer("csd-0", it) }
-            csd1?.let { videoFormat.setByteBuffer("csd-1", it) }
+                MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, piece.width, piece.height)
+            piece.csd0?.let { videoFormat.setByteBuffer("csd-0", it) }
+            piece.csd1?.let { videoFormat.setByteBuffer("csd-1", it) }
             val videoTrack = muxer.addTrack(videoFormat)
 
             var audioTrack = -1
-            if (aList.isNotEmpty() && acsd != null) {
+            if (aList.isNotEmpty() && state.audioCsd != null) {
                 val audioFormat = MediaFormat.createAudioFormat(
                     MediaFormat.MIMETYPE_AUDIO_AAC, audioSampleRate, audioChannels
                 )
-                audioFormat.setByteBuffer("csd-0", acsd.duplicate())
+                audioFormat.setByteBuffer("csd-0", state.audioCsd.duplicate())
                 audioFormat.setInteger(
                     MediaFormat.KEY_AAC_PROFILE,
                     MediaCodecInfo.CodecProfileLevel.AACObjectLC
@@ -552,9 +769,15 @@ class ScreenRingRecorder(
             muxer.release()
         } catch (_: Throwable) {
         }
-        val audioPeak = peakCopy
+        val audioPeak = state.peaks
             .filter { it.ptsUs in base..lastPts }
             .maxOfOrNull { it.value } ?: 0
-        return ClipResult(true, durationMs, outFile.length(), "", audioPeak)
+        return ClipResult(
+            ok = true,
+            durationMs = durationMs,
+            sizeBytes = outFile.length(),
+            audioPeak = audioPeak,
+            rotationTrimmed = hasEarlier
+        )
     }
 }

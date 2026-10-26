@@ -8,7 +8,9 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.content.pm.ServiceInfo
+import android.hardware.display.DisplayManager
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
@@ -19,6 +21,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.DisplayMetrics
 import android.util.Log
+import android.view.Display
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
@@ -117,6 +120,30 @@ class CaptureService : Service(), OverlayController.Listener {
     private var appliedVideoMode = false
     private var appliedQuality = QualityProfile.DEFAULT_INDEX
 
+    /** 旋转时只换视频尺寸；画质档位仍在启动时锁定。 */
+    private var captureQuality = QualityProfile.of(QualityProfile.DEFAULT_INDEX)
+    private var captureWidth = 0
+    private var captureHeight = 0
+    private var captureDpi = 0
+    private var displayManager: DisplayManager? = null
+    private var displayListenerRegistered = false
+
+    private data class CaptureGeometry(
+        val width: Int,
+        val height: Int,
+        val dpi: Int
+    )
+
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) = Unit
+
+        override fun onDisplayRemoved(displayId: Int) = Unit
+
+        override fun onDisplayChanged(displayId: Int) {
+            if (displayId == Display.DEFAULT_DISPLAY) refreshCaptureGeometry()
+        }
+    }
+
     private class Prepared(
         val file: File,
         val frames: List<String>,
@@ -126,6 +153,9 @@ class CaptureService : Service(), OverlayController.Listener {
         val hasAudio: Boolean,
         /** 片段里是否存在音轨（有可能是全静音的轨） */
         val trackPresent: Boolean = false,
+        /** 视频直传遇到旋转时只取了最新方向，片段比设置窗口短。 */
+        val rotationTrimmed: Boolean = false,
+        val clipCount: Int = 1,
         val ok: Boolean = true,
         val message: String = ""
     )
@@ -219,14 +249,13 @@ class CaptureService : Service(), OverlayController.Listener {
         @Suppress("DEPRECATION")
         (getSystemService(WINDOW_SERVICE) as WindowManager).defaultDisplay.getRealMetrics(metrics)
         val quality = prefs.quality()
-        // 档位里的 720/1080 是「屏幕短边」：竖屏手机的最长边是高度，
-        // 以前按 maxOf(w, h) 算会把 1080 宽的屏幕压成 480 宽，小字直接糊掉。
-        val shortSide = min(metrics.widthPixels, metrics.heightPixels)
-        val scale = min(1f, quality.shortSide.toFloat() / shortSide)
-        var width = ((metrics.widthPixels * scale).toInt() / 16) * 16
-        var height = ((metrics.heightPixels * scale).toInt() / 16) * 16
-        width = width.coerceAtLeast(160)
-        height = height.coerceAtLeast(160)
+        captureQuality = quality
+        val geometry = captureGeometry(metrics, quality)
+        captureWidth = geometry.width
+        captureHeight = geometry.height
+        captureDpi = geometry.dpi
+        val width = geometry.width
+        val height = geometry.height
 
         // 只采应用内播放的声音（回放捕获），不再提供麦克风选项
         val sampleRate = AudioHub.PLAYBACK_SAMPLE_RATE
@@ -277,11 +306,72 @@ class CaptureService : Service(), OverlayController.Listener {
         overlay = OverlayController(this, this, prefs.clipSeconds).also { it.showBubble() }
         ready = true
         isRunning = true
+        startDisplayMonitoring()
         appliedSeconds = prefs.clipSeconds
         appliedFrames = prefs.frameCount
         appliedVideoMode = prefs.videoMode
         appliedQuality = prefs.qualityProfile
         toast("助手已启动，保留最近 ${prefs.clipSeconds} 秒画面与声音")
+    }
+
+    private fun captureGeometry(metrics: DisplayMetrics, quality: QualityProfile): CaptureGeometry {
+        // 档位里的 720/1080 是屏幕短边，横竖屏切换时用同一规则重新计算。
+        val shortSide = min(metrics.widthPixels, metrics.heightPixels)
+        val scale = min(1f, quality.shortSide.toFloat() / shortSide)
+        val width = (((metrics.widthPixels * scale).toInt() / 16) * 16).coerceAtLeast(160)
+        val height = (((metrics.heightPixels * scale).toInt() / 16) * 16).coerceAtLeast(160)
+        return CaptureGeometry(width, height, metrics.densityDpi)
+    }
+
+    private fun startDisplayMonitoring() {
+        if (displayListenerRegistered) return
+        val manager = getSystemService(DisplayManager::class.java) ?: return
+        displayManager = manager
+        manager.registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
+        displayListenerRegistered = true
+        refreshCaptureGeometry()
+    }
+
+    private fun stopDisplayMonitoring() {
+        if (!displayListenerRegistered) return
+        try {
+            displayManager?.unregisterDisplayListener(displayListener)
+        } catch (_: Throwable) {
+        }
+        displayListenerRegistered = false
+        displayManager = null
+    }
+
+    /**
+     * DisplayListener 只负责检测尺寸变化；真正重建编码器在录制器自己的串行线程完成，
+     * 避免在主线程 join 视频线程。
+     */
+    private fun refreshCaptureGeometry() {
+        if (!ready) return
+        val display = displayManager?.getDisplay(Display.DEFAULT_DISPLAY) ?: return
+        val metrics = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        display.getRealMetrics(metrics)
+        val geometry = captureGeometry(metrics, captureQuality)
+        if (geometry.width == captureWidth &&
+            geometry.height == captureHeight &&
+            geometry.dpi == captureDpi
+        ) {
+            return
+        }
+        captureWidth = geometry.width
+        captureHeight = geometry.height
+        captureDpi = geometry.dpi
+        Log.i(
+            TIMING_TAG,
+            "屏幕尺寸变化，准备切换视频段：${geometry.width}x${geometry.height}"
+        )
+        recorder?.switchVideoGeometry(geometry.width, geometry.height, geometry.dpi)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        Handler(Looper.getMainLooper()).post { refreshCaptureGeometry() }
     }
 
     // ------------------------------------------------------------------ 交互
@@ -372,6 +462,7 @@ class CaptureService : Service(), OverlayController.Listener {
             return
         }
         if (asking) return
+        val videoMode = prefs.videoMode
         val rec = recorder
         if (rec == null || !ready) {
             overlay?.setStatus("录制还没准备好")
@@ -398,7 +489,7 @@ class CaptureService : Service(), OverlayController.Listener {
                         if (rec.isFrozen()) "正在打包「点按钮那一刻」之前的 ${prefs.clipSeconds} 秒…"
                         else "正在打包最近 ${prefs.clipSeconds} 秒…"
                     )
-                    val p = withContext(Dispatchers.IO) { prepare(rec) }
+                    val p = withContext(Dispatchers.IO) { prepare(rec, videoMode) }
                     if (!p.ok) throw IllegalStateException(p.message)
                     p
                 } else {
@@ -422,11 +513,19 @@ class CaptureService : Service(), OverlayController.Listener {
 
                 val answer: String
                 val summary: String
-                if (prefs.videoMode) {
+                if (videoMode) {
                     val hearsAudio = prefs.qwenModelHearsAudio()
+                    val warnings = mutableListOf<String>()
                     if (prepared != null && !prepared.hasAudio) {
-                        overlay?.setWarning(silenceMessage(prepared))
+                        warnings.add(silenceMessage(prepared))
                     }
+                    if (prepared?.rotationTrimmed == true) {
+                        warnings.add(
+                            "⚠️ 屏幕刚发生方向/尺寸变化。视频直传的 MP4 不能混两种尺寸，本次只使用单方向 " +
+                                "${prepared.durationMs / 1000} 秒画面；抽帧模式会合并旋转前后的画面。"
+                        )
+                    }
+                    overlay?.setWarning(warnings.joinToString("\n\n"))
                     if (prepared == null) overlay?.setStatus("追问中（沿用上一轮的画面）…")
                     answer = withContext(Dispatchers.IO) {
                         videoClient.ask(
@@ -470,7 +569,12 @@ class CaptureService : Service(), OverlayController.Listener {
                     summary = if (prepared == null) {
                         "已追问 · 第 ${history.size + 1} 轮（画面沿用上一轮）"
                     } else {
-                        "已发送 · ${prepared.frames.size} 帧 / ${prepared.durationMs / 1000} 秒"
+                        buildString {
+                            append("已发送 · ${prepared.frames.size} 帧 / ${prepared.durationMs / 1000} 秒")
+                            if (prepared.clipCount > 1) {
+                                append(" · 已合并 ${prepared.clipCount} 段旋转画面")
+                            }
+                        }
                     }
                 }
 
@@ -623,51 +727,139 @@ class CaptureService : Service(), OverlayController.Listener {
         }
     }
 
-    private fun prepare(rec: ScreenRingRecorder): Prepared {
+    private fun prepare(rec: ScreenRingRecorder, videoMode: Boolean): Prepared {
         val dir = File(cacheDir, "clips").apply { mkdirs() }
         pruneClips(dir, keep = 3)
-        val file = File(dir, "clip_${System.currentTimeMillis()}.mp4")
-        val result = rec.exportClip(file)
-        if (!result.ok) {
-            return Prepared(file, emptyList(), null, 0, false, ok = false, message = result.message)
+        val baseName = "clip_${System.currentTimeMillis()}"
+        val latestFile = File(dir, "$baseName.mp4")
+        val parts = if (videoMode) {
+            rec.exportLatestClip(latestFile)?.let { listOf(it) }.orEmpty()
+        } else {
+            rec.exportRecentClips(dir, baseName)
         }
-        val frames = if (prefs.videoMode) {
+        if (parts.isEmpty()) {
+            return Prepared(
+                latestFile,
+                emptyList(),
+                null,
+                0,
+                false,
+                ok = false,
+                message = "还没录到可用的画面，请过几秒再问"
+            )
+        }
+        val primary = parts.last()
+        val failed = parts.firstOrNull { !it.result.ok }
+        if (primary.result.ok.not()) {
+            return Prepared(
+                primary.file,
+                emptyList(),
+                null,
+                primary.result.durationMs,
+                false,
+                ok = false,
+                message = primary.result.message
+            )
+        }
+        if (failed != null && parts.size == 1) {
+            return Prepared(
+                failed.file,
+                emptyList(),
+                null,
+                failed.result.durationMs,
+                false,
+                ok = false,
+                message = failed.result.message
+            )
+        }
+
+        val frames = if (videoMode) {
             emptyList()
         } else {
             val quality = prefs.quality()
-            val extracted = FrameExtractor.extractJpegBase64(
-                file, prefs.frameCount, quality.frameShortSide, quality.frameQuality
+            val extracted = extractCombinedFrames(
+                parts, prefs.frameCount, quality.frameShortSide, quality.frameQuality
             )
             if (extracted.isEmpty()) {
                 // 抽不到画面就直接失败：否则会给模型发一条「附带截图」却没有图的请求，它会照着编
                 return Prepared(
-                    file = file,
+                    file = primary.file,
                     frames = emptyList(),
                     savedPath = null,
-                    durationMs = result.durationMs,
+                    durationMs = parts.sumOf { it.result.durationMs },
                     hasAudio = false,
+                    clipCount = parts.size,
                     ok = false,
                     message = "抽帧失败，请重试或换一档画质"
                 )
             }
             extracted
         }
-        val trackPresent = MediaProbe.hasAudioTrack(file)
+        val trackPresent = MediaProbe.hasAudioTrack(primary.file)
         // 有音轨不代表有声音：被 App 屏蔽时 AudioRecord 只会返回全 0
-        val hasAudio = trackPresent && result.audioPeak > SILENCE_PEAK
+        val hasAudio = trackPresent && primary.result.audioPeak > SILENCE_PEAK
         var saved: String? = null
         if (prefs.saveClip) {
             try {
                 val target = getExternalFilesDir(Environment.DIRECTORY_MOVIES)
                     ?: File(filesDir, "clips").also { it.mkdirs() }
-                val dst = File(target, file.name)
-                file.copyTo(dst, overwrite = true)
-                saved = dst.absolutePath
+                for (part in parts) {
+                    part.file.copyTo(File(target, part.file.name), overwrite = true)
+                }
+                saved = target.absolutePath
             } catch (t: Throwable) {
                 Log.w(TAG, "save clip failed", t)
             }
         }
-        return Prepared(file, frames, saved, result.durationMs, hasAudio, trackPresent)
+        return Prepared(
+            file = primary.file,
+            frames = frames,
+            savedPath = saved,
+            durationMs = if (videoMode) primary.result.durationMs else parts.sumOf { it.result.durationMs },
+            hasAudio = hasAudio,
+            trackPresent = trackPresent,
+            rotationTrimmed = videoMode && primary.result.rotationTrimmed,
+            clipCount = parts.size
+        )
+    }
+
+    /**
+     * 旋转后可能有多个不同尺寸的小片段。按路径与画质的时长权重分配用户设置的总帧数，
+     * 再按时间顺序拼起来，避免每个方向都各自抽满 N 帧导致请求体积翻倍。
+     */
+    private fun extractCombinedFrames(
+        parts: List<ScreenRingRecorder.ClipPart>,
+        totalCount: Int,
+        frameShortSide: Int,
+        frameQuality: Int
+    ): List<String> {
+        val usableParts = parts.filter { it.result.ok && it.file.exists() }
+        if (usableParts.isEmpty() || totalCount <= 0) return emptyList()
+        val chosen = if (usableParts.size <= totalCount) {
+            usableParts
+        } else {
+            usableParts.takeLast(totalCount)
+        }
+        val counts = IntArray(chosen.size) { 1 }
+        val weights = chosen.map { it.result.durationMs.coerceAtLeast(1L).toDouble() }
+        repeat(totalCount - chosen.size) {
+            val index = chosen.indices.maxByOrNull { i ->
+                weights[i] / (counts[i] + 1)
+            } ?: return@repeat
+            counts[index]++
+        }
+        return buildList {
+            chosen.forEachIndexed { index, part ->
+                addAll(
+                    FrameExtractor.extractJpegBase64(
+                        part.file,
+                        counts[index],
+                        frameShortSide,
+                        frameQuality
+                    )
+                )
+            }
+        }
     }
 
     /** 缓存目录里的片段只留最近几个，避免缓存无限膨胀（每个几十 MB） */
@@ -762,6 +954,7 @@ class CaptureService : Service(), OverlayController.Listener {
         if (stopping) return
         stopping = true
         scope.launch {
+            stopDisplayMonitoring()
             try {
                 utterance?.stop()
             } catch (_: Throwable) {
@@ -809,6 +1002,7 @@ class CaptureService : Service(), OverlayController.Listener {
         isRunning = false
         ready = false
         stopping = true
+        stopDisplayMonitoring()
         try {
             recorder?.release()
         } catch (_: Throwable) {
