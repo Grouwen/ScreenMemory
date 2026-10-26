@@ -62,6 +62,12 @@ class CaptureService : Service(), OverlayController.Listener {
         private const val CHANNEL_ID = "screen_memory"
         private const val NOTIF_ID = 1001
 
+        /** 追问时最多回放多少轮历史，避免越问越慢（每轮都是一问一答的全文） */
+        private const val MAX_HISTORY_TURNS = 8
+
+        /** 计时日志的 TAG，排查"为什么变慢"时只看这个：adb logcat -s Timing */
+        private const val TIMING_TAG = "Timing"
+
         /** 低于这个峰值就当静音（16bit，约 -60dBFS） */
         private const val SILENCE_PEAK = 32
 
@@ -368,8 +374,10 @@ class CaptureService : Service(), OverlayController.Listener {
 
         // 面板冻结一次画面 = 一段对话。首轮附画面，之后都是追问
         val conv = conversation ?: Conversation(System.currentTimeMillis()).also { conversation = it }
-        val history = conv.turns.toList()
+        // 只回放最近若干轮：每轮都是完整问答，不设上限的话回答会越问越慢
+        val history = conv.turns.takeLast(MAX_HISTORY_TURNS).toList()
         val firstTurn = history.isEmpty()
+        val startedAt = SystemClock.elapsedRealtime()
 
         asking = true
         overlay?.setBusy(true)
@@ -390,11 +398,14 @@ class CaptureService : Service(), OverlayController.Listener {
                 } else {
                     null
                 }
+                val preparedAt = SystemClock.elapsedRealtime()
 
                 // 流式输出：先纯文本预览，收尾再整体渲染 Markdown（半截公式不能交给 LaTeX 渲染器）
                 val streamed = StringBuilder()
                 var lastPush = 0L
+                var firstTokenAt = 0L
                 val onDelta: (String) -> Unit = { delta ->
+                    if (firstTokenAt == 0L) firstTokenAt = SystemClock.elapsedRealtime()
                     streamed.append(delta)
                     val now = SystemClock.uptimeMillis()
                     if (now - lastPush >= 120) {
@@ -463,6 +474,8 @@ class CaptureService : Service(), OverlayController.Listener {
                 )
                 overlay?.setTranscript(conv.turns.toList(), null, null)
 
+                logTiming(startedAt, preparedAt, firstTokenAt, prepared, history.size, firstTurn)
+
                 val builder = StringBuilder(summary)
                 // 渲染降级时把原因带出来，否则用户只看到一堆 $ 和 #
                 overlay?.lastRenderError?.let { builder.append("\n⚠️ 渲染降级：").append(it) }
@@ -480,6 +493,33 @@ class CaptureService : Service(), OverlayController.Listener {
                 overlay?.setBusy(false)
             }
         }
+    }
+
+    /**
+     * 一行日志把每次请求拆成三段，排查"为什么变慢"只看这个：
+     * `adb logcat -s Timing`
+     *
+     * - 准备：导出 MP4 + 抽帧 + JPEG 编码（本地耗时，跟手机性能有关）
+     * - 首字：上传 + 服务端排队 + prefill（网络和模型侧，最不可控）
+     * - 总时长：还包括逐字生成
+     */
+    private fun logTiming(
+        startedAt: Long,
+        preparedAt: Long,
+        firstTokenAt: Long,
+        prepared: Prepared?,
+        historyTurns: Int,
+        firstTurn: Boolean
+    ) {
+        val now = SystemClock.elapsedRealtime()
+        val frames = prepared?.frames.orEmpty()
+        val uploadKb = frames.sumOf { it.length.toLong() } * 3 / 4 / 1024
+        val ttft = if (firstTokenAt > 0) firstTokenAt - preparedAt else -1L
+        Log.i(
+            TIMING_TAG,
+            "准备=${preparedAt - startedAt}ms 首字=${ttft}ms 总=${now - preparedAt}ms " +
+                "帧=${frames.size} 上传≈${uploadKb}KB 历史轮=$historyTurns 首轮=$firstTurn"
+        )
     }
 
     /** 开始一段新对话：下一问会重新附上画面 */
@@ -638,16 +678,21 @@ class CaptureService : Service(), OverlayController.Listener {
     }
 
     /** 数学网课助教的答题规范，四套提示词共用 */
+//    private val mathRules = """
+//        回答请遵守这些规则：
+//        1. 先说清「老师现在讲到哪一步」，再解释这一步；
+//        2. 解释要给依据：用到哪个定义 / 定理 / 公式变形，为什么可以这样变形；
+//        3. 如果是让你接着算或接着推，给出下一步的具体写法，而不只是结论；
+//        4. 公式一律用 LaTeX：行内 $...$、独立成行 $$...$$。不要用 * 当乘号、不要用 / 写分式、不要用 ^ 之外的方式表示上下标；
+//        5. 用简体中文，重点讲解讲思路；
+//        6. 画面信息不足以判断时，直接说明还需要看到哪一部分，不要编造板书内容。
+//
+//        排版用 Markdown（列表、加粗即可），不要输出 HTML 标签，不要用 +---+ 这种 ASCII 线框画表格。
+//    """.trimIndent()
     private val mathRules = """
-        回答请遵守这些规则：
-        1. 先说清「老师现在讲到哪一步」，再解释这一步；
-        2. 解释要给依据：用到哪个定义 / 定理 / 公式变形，为什么可以这样变形；
-        3. 如果是让你接着算或接着推，给出下一步的具体写法，而不只是结论；
-        4. 公式一律用 LaTeX：行内 $...$、独立成行 $$...$$。不要用 * 当乘号、不要用 / 写分式、不要用 ^ 之外的方式表示上下标；
-        5. 用简体中文，重点讲解讲思路；
-        6. 画面信息不足以判断时，直接说明还需要看到哪一部分，不要编造板书内容。
+        你是一个专业的数学老师助教，请根据视频回答用户的提问
 
-        排版用 Markdown（列表、加粗即可），不要输出 HTML 标签，不要用 +---+ 这种 ASCII 线框画表格。
+        注意：排版用 Markdown（列表、加粗即可），不要输出 HTML 标签，不要用 +---+ 这种 ASCII 线框画表格。
     """.trimIndent()
 
     private fun systemPrompt(): String = """
