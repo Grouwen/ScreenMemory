@@ -464,7 +464,7 @@ class OverlayController(
         root.addView(header)
 
         val status = TextView(context).apply {
-            text = "哪一步没看懂？按住说话、点下面的常用问题，或直接打字"
+            text = "哪一步没看懂？按住说话，或直接打字"
             setTextColor(0xFF6B7280.toInt())
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setPadding(0, dp(6), 0, dp(8))
@@ -516,49 +516,6 @@ class OverlayController(
         }
         answerScroll = answerBox
         root.addView(answerBox)
-
-        // 网课场景的常用问题：比说话/打字都快，点一下直接问
-        val quickQuestions = listOf("这一步怎么来的", "再讲一遍", "举个例子", "为什么这么做")
-        val quickBox = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(8) }
-        }
-        quickQuestions.chunked(2).forEachIndexed { rowIndex, pair ->
-            val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
-            pair.forEachIndexed { index, question ->
-                val chip = TextView(context).apply {
-                    text = question
-                    gravity = Gravity.CENTER
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                    setTextColor(0xFF2F6BFF.toInt())
-                    setPadding(dp(6), dp(8), dp(6), dp(8))
-                    background = GradientDrawable().apply {
-                        cornerRadius = dp(12).toFloat()
-                        setColor(0xFFE8EFFF.toInt())
-                    }
-                    isClickable = true
-                    setOnClickListener { listener.onSend(question) }
-                }
-                val lp = LinearLayout.LayoutParams(
-                    0,
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    1f
-                )
-                if (index == 0 && pair.size > 1) lp.marginEnd = dp(6)
-                row.addView(chip, lp)
-            }
-            quickBox.addView(
-                row,
-                LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { if (rowIndex > 0) topMargin = dp(6) }
-            )
-        }
-        root.addView(quickBox)
 
         val input = EditText(context).apply {
             hint = "有具体问题写这里，比如「第三行为什么能直接约掉」"
