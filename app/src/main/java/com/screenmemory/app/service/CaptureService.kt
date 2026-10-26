@@ -479,6 +479,7 @@ class CaptureService : Service(), OverlayController.Listener {
                     ChatTurn(question, answer.ifBlank { "模型没有返回内容" }, System.currentTimeMillis(), firstTurn)
                 )
                 overlay?.setTranscript(conv.turns.toList(), null, null)
+                overlay?.clearInput()
 
                 logTiming(startedAt, preparedAt, firstTokenAt, prepared, history.size, firstTurn)
 
@@ -545,6 +546,7 @@ class CaptureService : Service(), OverlayController.Listener {
     override fun onNewConversation() {
         startNewConversation()
         overlay?.setTranscript(emptyList(), null, null)
+        overlay?.clearInput()
         overlay?.setStatus("已开始新对话 · 下一问会重新附上当前画面")
     }
 

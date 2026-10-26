@@ -627,6 +627,11 @@ class OverlayController(
         main.post { inputView?.setText(text); inputView?.setSelection(text.length) }
     }
 
+    /** 发送成功后清空输入框；失败时保留原文，方便直接再点一次发送 */
+    fun clearInput() {
+        main.post { inputView?.setText("") }
+    }
+
     /**
      * 渲染整段对话（多轮追问）。
      *
