@@ -530,6 +530,8 @@ class MainActivity : AppCompatActivity() {
         val format = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
         for (conv in all) {
             val item = inflater.inflate(R.layout.item_history, historyList, false)
+            item.findViewById<TextView>(R.id.tvItemTitle).text =
+                historyTitle(conv.turns.firstOrNull()?.answer.orEmpty())
             item.findViewById<TextView>(R.id.tvItemMeta).text =
                 format.format(Date(conv.id)) + " · " + conv.turns.size + " 轮"
             item.findViewById<TextView>(R.id.tvItemQuestion).text =
@@ -541,14 +543,21 @@ class MainActivity : AppCompatActivity() {
                     conv.turns.lastOrNull()?.answer?.trim()?.replace('\n', ' ').orEmpty()
                 ).ifBlank { "（没有回答）" }
             item.setOnClickListener { openHistoryDetail(conv) }
-            historyList.addView(
-                item,
-                LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-            )
+            // 使用 XML 中定义的卡片外边距，让相邻记录保持清晰间距。
+            historyList.addView(item)
         }
+    }
+
+    /** 历史列表标题取 AI 首答的前 18 个字符，去掉 Markdown 后保持单行。 */
+    private fun historyTitle(answer: String): String {
+        val plain = Preview.plain(answer)
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        if (plain.isEmpty()) return "AI 暂无回复"
+        val maxChars = 18
+        val codePoints = plain.codePointCount(0, plain.length)
+        if (codePoints <= maxChars) return plain
+        return plain.substring(0, plain.offsetByCodePoints(0, maxChars)).trimEnd() + "…"
     }
 
     private fun openHistoryDetail(conv: Conversation) {

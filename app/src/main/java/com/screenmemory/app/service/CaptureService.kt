@@ -648,13 +648,6 @@ class CaptureService : Service(), OverlayController.Listener {
         conversation = Conversation(System.currentTimeMillis())
     }
 
-    override fun onNewConversation() {
-        startNewConversation()
-        overlay?.setTranscript(emptyList(), null, null)
-        overlay?.clearInput()
-        overlay?.setStatus("已开始新对话 · 下一问会重新附上当前画面")
-    }
-
     override fun onStopService() {
         stopEverything(true)
     }

@@ -50,9 +50,6 @@ class OverlayController(
         fun onSend(text: String)
         fun onStopService()
 
-        /** 用户点了「新对话」：清空当前上下文，下一问重新附画面 */
-        fun onNewConversation()
-
         /** 用户点了悬浮球、面板即将出现：此刻应当把画面截断 */
         fun onPanelOpened()
 
@@ -513,15 +510,6 @@ class OverlayController(
                 setPadding(dp(8), dp(4), dp(8), dp(6))
                 contentDescription = "收起聊天，查看视频"
                 setOnClickListener { hideChatForVideo() }
-            }
-        )
-        header.addView(
-            TextView(context).apply {
-                text = "新对话"
-                setTextColor(0xFF2F6BFF.toInt())
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                setPadding(dp(8), dp(4), dp(8), dp(6))
-                setOnClickListener { listener.onNewConversation() }
             }
         )
         header.addView(
