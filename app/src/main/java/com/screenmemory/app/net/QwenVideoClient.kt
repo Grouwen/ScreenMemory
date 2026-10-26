@@ -34,7 +34,7 @@ import android.util.Log
  * ② 视频理解（OpenAI 兼容接口）
  *    POST {chat}/chat/completions        X-DashScope-OssResourceResolve: enable
  *    content: [{"type":"text","text":…},
- *              {"type":"video_url","video_url":{"url":"oss://…"},"fps":2}]
+ *              {"type":"video_url","video_url":{"url":"oss://…"},"fps":1}]
  *    文档：https://docs.bailian.console.aliyun.com/zh/model-studio/vision
  *
  * 文档给的选型规则：<7MB 可 base64，>7MB 只能公网 URL/oss://。所以 oss:// 失败且
@@ -43,8 +43,15 @@ import android.util.Log
 class QwenVideoClient(private val prefs: Prefs) {
 
     private companion object {
-        /** 抽帧频率，文档取值范围 [0.1, 10]，默认 2.0 */
-        const val VIDEO_FPS = 2
+        /**
+         * 抽帧频率，文档取值范围 [0.1, 10]，默认 2.0。
+         *
+         * 服务端是按这个频率把视频拆成图片喂给视觉编码器的：8 秒 × 2fps = 16 帧，
+         * 每帧 720p 就是十几 k token 的 prefill——**首字延迟跟文件大小没关系，跟
+         * 「时长 × fps × 分辨率」成正比**。网课板书基本是静态的，1fps 足够看出
+         * 推导过程，帧数直接减半。
+         */
+        const val VIDEO_FPS = 1
 
         /** 文档：Base64 内联要求原始文件小于 7MB */
         const val BASE64_MAX_BYTES = 7L * 1024 * 1024
@@ -110,9 +117,10 @@ class QwenVideoClient(private val prefs: Prefs) {
             val mb = (video?.length() ?: 0L) / 1024.0 / 1024.0
             Log.i(
                 TIMING_TAG,
-                "视频[$sentVia] 上传=%dms 首字=%dms 总=%dms 片段=%.1fMB 上传速率=%.1fMbps".format(
+                "视频[$sentVia] 上传=%dms 首字=%dms 总=%dms 片段=%.1fMB 上传速率=%.1fMbps 模型=%s fps=%d".format(
                     up, ttft, now - t0, mb,
-                    if (up > 0) mb * 8 / (up / 1000.0) else 0.0
+                    if (up > 0) mb * 8 / (up / 1000.0) else 0.0,
+                    prefs.qwenModel(), VIDEO_FPS
                 )
             )
         }

@@ -157,12 +157,14 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
       {"role":"system","content":"…"},
       {"role":"user","content":[
          {"type":"text","text":"你刚才问的话"},
-         {"type":"video_url","video_url":{"url":"oss://…"},"fps":2}]}]}
+         {"type":"video_url","video_url":{"url":"oss://…"},"fps":1}]}]}
    ← choices[0].message.content
 ```
 
 > 文档出处：[上传本地文件获取临时 URL](https://help.aliyun.com/zh/model-studio/get-temporary-file-url)、[视觉理解（视频）](https://docs.bailian.console.aliyun.com/zh/model-studio/vision)。
 > 注意视频走的是 **OpenAI 兼容入口**，不是 `multimodal-generation/generation`；`fps` 放在 content 元素这一层，取值范围 [0.1, 10]，默认 2。
+>
+> **为什么设成 1 fps**：服务端按这个频率把视频拆成图片喂给视觉编码器，8 秒 × 2fps = 16 帧 720p ≈ 十几 k token 的 prefill。**首字延迟跟文件大小无关，跟「时长 × fps × 分辨率」成正比** —— 1.25MB 的视频照样慢，就是这个原因。网课板书基本静态，1 fps 足够看出推导过程。
 
 **和抽帧的差别**
 
