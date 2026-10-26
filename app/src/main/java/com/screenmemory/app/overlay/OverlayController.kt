@@ -67,10 +67,11 @@ class OverlayController(
     private val metrics: DisplayMetrics
         get() = context.resources.displayMetrics
 
-    private var bubble: View? = null
+    private var bubble: TextView? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var panel: View? = null
     private var panelParams: WindowManager.LayoutParams? = null
+    private var chatHidden = false
 
     private var statusView: TextView? = null
     private var warningView: TextView? = null
@@ -318,13 +319,20 @@ class OverlayController(
     // ------------------------------------------------------------------ 面板
 
     private fun togglePanel() {
-        if (panel == null) showPanel() else hidePanel()
+        when {
+            panel == null -> showPanel()
+            chatHidden -> showChatFromVideo()
+            else -> hidePanel()
+        }
     }
 
     fun showPanel() {
         main.post {
             if (destroyed) return@post
             if (panel != null) return@post
+            chatHidden = false
+            bubble?.text = "问"
+            bubble?.contentDescription = null
             // 先截断，再建面板：这样面板和键盘不会进入录像
             listener.onPanelOpened()
             val view = try {
@@ -371,6 +379,9 @@ class OverlayController(
     fun hidePanel() {
         main.post {
             val view = panel ?: return@post
+            chatHidden = false
+            bubble?.text = "问"
+            bubble?.contentDescription = null
             try {
                 wm.removeView(view)
             } catch (_: Throwable) {
@@ -379,6 +390,57 @@ class OverlayController(
             panelParams = null
             listener.onPanelClosed()
             clearViewRefs()
+        }
+    }
+
+    /** 收起聊天但保留冻结画面、对话和正在进行的回答；悬浮球变成“聊”用于恢复。 */
+    private fun hideChatForVideo() {
+        main.post {
+            val view = panel ?: return@post
+            if (chatHidden) return@post
+            chatHidden = true
+            inputView?.clearFocus()
+            hideKeyboard()
+            view.visibility = View.GONE
+            panelParams?.let { lp ->
+                lp.flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                applyLayout(view, lp)
+            }
+            bubble?.text = "聊"
+            bubble?.contentDescription = "重新显示聊天"
+            try {
+                Toast.makeText(context, "聊天已收起，点「聊」切回来", Toast.LENGTH_SHORT).show()
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    private fun showChatFromVideo() {
+        main.post {
+            val view = panel ?: run {
+                chatHidden = false
+                showPanel()
+                return@post
+            }
+            chatHidden = false
+            view.visibility = View.VISIBLE
+            panelParams?.let { lp ->
+                lp.flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                applyLayout(view, lp)
+            }
+            bubble?.text = "问"
+            bubble?.contentDescription = null
+            view.requestLayout()
+        }
+    }
+
+    private fun hideKeyboard() {
+        try {
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE)
+                as android.view.inputmethod.InputMethodManager
+            imm.hideSoftInputFromWindow(inputView?.windowToken, 0)
+        } catch (_: Throwable) {
         }
     }
 
@@ -442,6 +504,16 @@ class OverlayController(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 1f
             )
+        )
+        header.addView(
+            TextView(context).apply {
+                text = "看视频"
+                setTextColor(0xFF2F6BFF.toInt())
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setPadding(dp(8), dp(4), dp(8), dp(6))
+                contentDescription = "收起聊天，查看视频"
+                setOnClickListener { hideChatForVideo() }
+            }
         )
         header.addView(
             TextView(context).apply {
