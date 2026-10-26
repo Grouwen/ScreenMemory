@@ -51,14 +51,13 @@
         android:paddingEnd="16dp"
         android:paddingBottom="16dp">
 
-        <TextView
-            android:id="@+id/tvDetailBody"
+        <LinearLayout
+            android:id="@+id/messageList"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:lineSpacingExtra="4dp"
-            android:textColor="?android:attr/textColorPrimary"
-            android:textIsSelectable="true"
-            android:textSize="14sp" />
+            android:orientation="vertical"
+            android:paddingTop="4dp"
+            android:paddingBottom="8dp" />
     </ScrollView>
 
     <!-- 继续追问 -->

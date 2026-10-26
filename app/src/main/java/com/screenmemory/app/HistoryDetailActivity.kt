@@ -4,13 +4,16 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
 import android.util.TypedValue
+import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.screenmemory.app.chat.ChatStore
 import com.screenmemory.app.chat.ChatTurn
 import com.screenmemory.app.chat.Conversation
@@ -62,7 +65,7 @@ class HistoryDetailActivity : AppCompatActivity() {
         """.trimIndent()
     }
 
-    private lateinit var body: TextView
+    private lateinit var messageList: LinearLayout
     private lateinit var scroll: ScrollView
     private lateinit var input: EditText
     private lateinit var send: Button
@@ -77,6 +80,8 @@ class HistoryDetailActivity : AppCompatActivity() {
 
     @Volatile
     private var lastPushAt = 0L
+
+    private var pendingAnswerView: TextView? = null
 
     private val markwon: Markwon? by lazy {
         try {
@@ -101,7 +106,7 @@ class HistoryDetailActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_history_detail)
 
-        body = findViewById(R.id.tvDetailBody)
+        messageList = findViewById(R.id.messageList)
         scroll = findViewById(R.id.detailScroll)
         input = findViewById(R.id.etFollowInput)
         send = findViewById(R.id.btnFollowSend)
@@ -111,7 +116,7 @@ class HistoryDetailActivity : AppCompatActivity() {
         val id = intent.getLongExtra(EXTRA_ID, 0L)
         val loaded = ChatStore(this).loadAll().firstOrNull { it.id == id }
         if (loaded == null) {
-            body.text = "这段对话已经不在了（可能被清空或超出保留上限）。"
+            addMessage("这段对话已经不在了（可能被清空或超出保留上限）。", isUser = false)
             input.isEnabled = false
             send.isEnabled = false
             followStatus.text = "无法继续这段对话"
@@ -122,7 +127,7 @@ class HistoryDetailActivity : AppCompatActivity() {
             SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(conv.id))
 
         send.setOnClickListener { sendFollowUp() }
-        render()
+        renderConversation()
         followStatus.text = "可以接着问 · 共 ${conv.turns.size} 轮（不再附图，只依据上面的对话）"
     }
 
@@ -133,46 +138,140 @@ class HistoryDetailActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------------ 渲染
 
-    private fun transcriptMarkdown(pendingQuestion: String?, pendingAnswer: String?): String {
-        val sb = StringBuilder()
-        conv.turns.forEachIndexed { index, turn ->
-            if (index > 0) sb.append("\n\n---\n\n")
-            sb.append("**你**：").append(turn.question).append("\n\n")
-            sb.append("**答**：").append(turn.answer)
-        }
-        if (pendingQuestion != null) {
-            if (conv.turns.isNotEmpty()) sb.append("\n\n---\n\n")
-            sb.append("**你**：").append(pendingQuestion).append("\n\n")
-            sb.append("**答**：").append(pendingAnswer.orEmpty())
-        }
-        return sb.toString()
-    }
-
-    private fun render() {
-        val markdown = transcriptMarkdown(null, null)
-        val renderer = markwon
-        if (renderer != null) {
-            try {
-                renderer.setMarkdown(body, Latex.normalize(markdown))
-                scrollDown()
-                return
-            } catch (t: Throwable) {
-                Log.w(TAG, "render failed", t)
+    private fun renderConversation() {
+        messageList.removeAllViews()
+        pendingAnswerView = null
+        if (conv.turns.isEmpty()) {
+            addMessage("这段对话还没有内容。", isUser = false)
+        } else {
+            for (turn in conv.turns) {
+                addMessage(turn.question, isUser = true)
+                addMessage(turn.answer, isUser = false)
             }
         }
-        body.text = Preview.plain(markdown)
         scrollDown()
     }
 
-    /** 流式阶段整段走纯文本，避免半截公式把渲染器炸掉 */
-    private fun renderStreaming(question: String, answer: String) {
-        body.text = Preview.plain(transcriptMarkdown(question, answer))
+    private fun addMessage(
+        message: String,
+        isUser: Boolean,
+        streaming: Boolean = false
+    ): TextView {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = if (isUser) Gravity.END else Gravity.START
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(10)
+            }
+        }
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = if (isUser) Gravity.END else Gravity.START
+        }
+        val role = TextView(this).apply {
+            text = if (isUser) "你" else "AI 助手"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTextColor(themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant))
+            setPadding(dp(4), 0, dp(4), dp(3))
+        }
+        val bubble = TextView(this).apply {
+            maxWidth = minOf(
+                (resources.displayMetrics.widthPixels * 0.82f).toInt(),
+                dp(560)
+            )
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTextIsSelectable(true)
+            setLineSpacing(dp(4).toFloat(), 1f)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            setBackgroundResource(
+                if (isUser) R.drawable.bg_chat_user else R.drawable.bg_chat_ai
+            )
+            setTextColor(
+                themeColor(
+                    if (isUser) {
+                        com.google.android.material.R.attr.colorOnPrimary
+                    } else {
+                        com.google.android.material.R.attr.colorOnSurfaceVariant
+                    }
+                )
+            )
+            if (isUser || streaming) {
+                this.text = if (streaming && message.isBlank()) {
+                    "正在回答…"
+                } else {
+                    Preview.plain(message)
+                }
+            } else {
+                renderAiMarkdown(this, message)
+            }
+        }
+        column.addView(
+            role,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+        column.addView(
+            bubble,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+        row.addView(
+            column,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+        messageList.addView(row)
+        return bubble
+    }
+
+    private fun renderAiMarkdown(view: TextView, text: String) {
+        val renderer = markwon
+        if (renderer != null) {
+            try {
+                renderer.setMarkdown(view, Latex.normalize(text))
+                return
+            } catch (t: Throwable) {
+                Log.w(TAG, "render bubble failed", t)
+            }
+        }
+        view.text = Preview.plain(text)
+    }
+
+    /** 流式阶段只更新最后一个 AI 气泡，避免每个 token 都重建整段对话。 */
+    private fun renderStreaming(answer: String) {
+        val view = pendingAnswerView ?: return
+        view.text = Preview.plain(answer.ifBlank { "正在回答…" })
         scrollDown()
     }
 
     private fun scrollDown() {
-        scroll.post { scroll.scrollTo(0, body.bottom) }
+        scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
     }
+
+    private fun themeColor(attr: Int): Int {
+        val value = TypedValue()
+        theme.resolveAttribute(attr, value, true)
+        return if (value.resourceId != 0) {
+            ContextCompat.getColor(this, value.resourceId)
+        } else {
+            value.data
+        }
+    }
+
+    private fun dp(value: Int): Int = TypedValue.applyDimension(
+        TypedValue.COMPLEX_UNIT_DIP,
+        value.toFloat(),
+        resources.displayMetrics
+    ).toInt()
 
     // ------------------------------------------------------------------ 继续追问
 
@@ -188,6 +287,9 @@ class HistoryDetailActivity : AppCompatActivity() {
         input.isEnabled = false
         followStatus.text = "追问中（只依据上面的对话，不再附图）…"
         hideKeyboard()
+        addMessage(question, isUser = true)
+        pendingAnswerView = addMessage("", isUser = false, streaming = true)
+        scrollDown()
 
         val history = conv.turns.takeLast(MAX_HISTORY_TURNS).toList()
         val streamed = StringBuilder()
@@ -199,7 +301,7 @@ class HistoryDetailActivity : AppCompatActivity() {
             if (now - lastPushAt >= STREAM_INTERVAL_MS) {
                 lastPushAt = now
                 val snapshot = streamed.toString()
-                runOnUiThread { renderStreaming(question, snapshot) }
+                runOnUiThread { renderStreaming(snapshot) }
             }
         }
 
@@ -238,14 +340,14 @@ class HistoryDetailActivity : AppCompatActivity() {
                 withContext(Dispatchers.IO) { ChatStore(this@HistoryDetailActivity).save(conv) }
 
                 input.setText("")
-                render()
+                renderConversation()
                 followStatus.text = "已追问 · 现在是第 ${conv.turns.size} 轮"
             } catch (t: Throwable) {
                 Log.e(TAG, "follow up failed", t)
                 followStatus.text = "追问失败：${t.message}"
                 // 失败的一轮不入库，把原文留在输入框里方便重发
                 input.setText(question)
-                render()
+                renderConversation()
             } finally {
                 sending = false
                 send.isEnabled = true

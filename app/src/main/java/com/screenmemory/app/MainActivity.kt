@@ -29,6 +29,7 @@ import com.google.android.material.textfield.TextInputEditText
 import com.screenmemory.app.chat.ChatStore
 import com.screenmemory.app.chat.Conversation
 import com.screenmemory.app.service.CaptureService
+import com.screenmemory.app.util.Preview
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -532,10 +533,13 @@ class MainActivity : AppCompatActivity() {
             item.findViewById<TextView>(R.id.tvItemMeta).text =
                 format.format(Date(conv.id)) + " · " + conv.turns.size + " 轮"
             item.findViewById<TextView>(R.id.tvItemQuestion).text =
-                conv.turns.firstOrNull()?.question?.trim().orEmpty().ifBlank { "（无提问）" }
+                Preview.plain(
+                    conv.turns.firstOrNull()?.question?.trim().orEmpty()
+                ).ifBlank { "（无提问）" }
             item.findViewById<TextView>(R.id.tvItemAnswer).text =
-                conv.turns.lastOrNull()?.answer?.trim()?.replace('\n', ' ').orEmpty()
-                    .ifBlank { "（没有回答）" }
+                Preview.plain(
+                    conv.turns.lastOrNull()?.answer?.trim()?.replace('\n', ' ').orEmpty()
+                ).ifBlank { "（没有回答）" }
             item.setOnClickListener { openHistoryDetail(conv) }
             historyList.addView(
                 item,
