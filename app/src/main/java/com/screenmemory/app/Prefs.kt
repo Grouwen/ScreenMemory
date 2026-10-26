@@ -1,6 +1,7 @@
 package com.screenmemory.app
 
 import android.content.Context
+import kotlin.math.roundToInt
 
 /**
  * 简单的本地配置存储（SharedPreferences 包装）。
@@ -154,6 +155,38 @@ class Prefs(context: Context) {
 
     /** 视频模型：上传凭证要用它，推理也必须用它 */
     fun qwenModel(): String = qwenVideoModel.ifBlank { "qwen-vl-max" }
+
+    /**
+     * 视频直传时服务端按这个频率把片段拆成图片喂给视觉编码器。
+     *
+     * 首字延迟跟**文件大小无关**，跟「时长 × fps × 分辨率」成正比：
+     * 8 秒 @2fps = 16 帧，@1fps = 8 帧，prefill 直接减半。
+     * 文档取值范围 [0.1, 10]，这里允许 0.5–4。
+     */
+    var videoFps: Float
+        get() = sp.getFloat("video_fps", 1f)
+        // 对齐到滑块的 0.5 步长：Slider 收到非步长值会直接抛异常
+        set(value) = sp.edit().putFloat(
+            "video_fps",
+            ((value.coerceIn(0.5f, 4f) * 2f).roundToInt() / 2f)
+        ).apply()
+
+    /**
+     * 深度思考开关：-1 = 不传该参数（默认，兼容所有模型），0 = 关闭，1 = 开启。
+     *
+     * 千问 qwen3 系列默认可能开启 thinking，出字前会先内部推理十几秒，
+     * 体感就是「点了发送半天不出字」。模型不支持该参数时请求会 400，
+     * 客户端会自动去掉参数重试一次。
+     */
+    var thinkingMode: Int
+        get() = sp.getInt("thinking_mode", -1)
+        set(value) = sp.edit().putInt("thinking_mode", value).apply()
+
+    fun enableThinking(): Boolean? = when (thinkingMode) {
+        0 -> false
+        1 -> true
+        else -> null
+    }
 
     /**
      * 模型能否解析音轨：0 = 自动（按型号名判断），1 = 能听，2 = 听不到。

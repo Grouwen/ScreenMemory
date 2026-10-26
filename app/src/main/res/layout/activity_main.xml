@@ -453,6 +453,89 @@
                     android:lineSpacingExtra="2dp"
                     android:text="「自动」按型号名判断：含 omni（如 qwen3.5-omni-plus）视为能听声音，其余视为只看画面。用了别名或新命名时手动指定。这个开关只改 prompt 措辞和状态栏标注，不改上传参数——音轨该传还是会传。"
                     android:textSize="11sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="视频抽帧频率"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:id="@+id/tvFpsHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:lineSpacingExtra="2dp"
+                    android:textSize="11sp" />
+
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/sliderFps"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:stepSize="0.5"
+                    android:valueFrom="0.5"
+                    android:valueTo="4"
+                    app:labelBehavior="gone" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:lineSpacingExtra="2dp"
+                    android:text="只在视频直传模式下生效。服务端按这个频率把片段拆成图片再喂给模型：8 秒 @1fps = 8 帧，@2fps = 16 帧，帧数翻倍等于 prefill 翻倍——**首字慢不慢跟文件大小没关系，跟「时长 × 频率」有关**。板书、PPT 用 1 帧/秒就够；老师写得飞快可以调到 1.5–2。"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="深度思考"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:id="@+id/tvThinkingHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textSize="11sp" />
+
+                <RadioGroup
+                    android:id="@+id/rgThinking"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <RadioButton
+                        android:id="@+id/rbThinkingAuto"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:checked="true"
+                        android:text="不传"
+                        android:textSize="13sp" />
+
+                    <RadioButton
+                        android:id="@+id/rbThinkingOff"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="关闭"
+                        android:textSize="13sp" />
+
+                    <RadioButton
+                        android:id="@+id/rbThinkingOn"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="开启"
+                        android:textSize="13sp" />
+                </RadioGroup>
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:lineSpacingExtra="2dp"
+                    android:text="对应请求里的 enable_thinking（仅视频直传/千问）。qwen3 等推理型模型默认可能在「想」，出字前先内部推理十几秒，体感就是半天没反应——关掉最快。「不传」= 完全不发这个参数，兼容所有模型；模型不支持时会自动去掉参数重试一次，不会报错。"
+                    android:textSize="11sp" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 

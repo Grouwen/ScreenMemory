@@ -43,16 +43,6 @@ import android.util.Log
 class QwenVideoClient(private val prefs: Prefs) {
 
     private companion object {
-        /**
-         * 抽帧频率，文档取值范围 [0.1, 10]，默认 2.0。
-         *
-         * 服务端是按这个频率把视频拆成图片喂给视觉编码器的：8 秒 × 2fps = 16 帧，
-         * 每帧 720p 就是十几 k token 的 prefill——**首字延迟跟文件大小没关系，跟
-         * 「时长 × fps × 分辨率」成正比**。网课板书基本是静态的，1fps 足够看出
-         * 推导过程，帧数直接减半。
-         */
-        const val VIDEO_FPS = 1
-
         /** 文档：Base64 内联要求原始文件小于 7MB */
         const val BASE64_MAX_BYTES = 7L * 1024 * 1024
 
@@ -117,10 +107,12 @@ class QwenVideoClient(private val prefs: Prefs) {
             val mb = (video?.length() ?: 0L) / 1024.0 / 1024.0
             Log.i(
                 TIMING_TAG,
-                "视频[$sentVia] 上传=%dms 首字=%dms 总=%dms 片段=%.1fMB 上传速率=%.1fMbps 模型=%s fps=%d".format(
+                "视频[$sentVia] 上传=%dms 首字=%dms 总=%dms 片段=%.1fMB 上传速率=%.1fMbps 模型=%s fps=%.1f 思考=%s".format(
                     up, ttft, now - t0, mb,
                     if (up > 0) mb * 8 / (up / 1000.0) else 0.0,
-                    prefs.qwenModel(), VIDEO_FPS
+                    prefs.qwenModel(),
+                    prefs.videoFps,
+                    prefs.enableThinking()?.toString() ?: "不传"
                 )
             )
         }
@@ -269,6 +261,12 @@ class QwenVideoClient(private val prefs: Prefs) {
 
     // ---------------------------------------------------------------- ③ 理解
 
+    /**
+     * 带「深度思考」参数的调用。
+     *
+     * 模型不支持 `enable_thinking` 时会返回 400，这时自动去掉参数再试一次
+     * （400 发生在出字之前，不会出现两份答案）。
+     */
     private fun chat(
         key: String,
         videoUrl: String?,
@@ -277,18 +275,47 @@ class QwenVideoClient(private val prefs: Prefs) {
         history: List<ChatTurn>,
         onDelta: (String) -> Unit
     ): String {
+        val thinking = prefs.enableThinking()
+        if (thinking == null) {
+            return chatOnce(key, videoUrl, question, systemPrompt, history, onDelta, null)
+        }
+        return try {
+            chatOnce(key, videoUrl, question, systemPrompt, history, onDelta, thinking)
+        } catch (t: Throwable) {
+            if (t.message?.contains("HTTP 400") == true) {
+                Log.w(
+                    TIMING_TAG,
+                    "模型不接受 enable_thinking，去掉参数重试：${t.message?.take(120)}"
+                )
+                chatOnce(key, videoUrl, question, systemPrompt, history, onDelta, null)
+            } else {
+                throw t
+            }
+        }
+    }
+
+    private fun chatOnce(
+        key: String,
+        videoUrl: String?,
+        question: String,
+        systemPrompt: String,
+        history: List<ChatTurn>,
+        onDelta: (String) -> Unit,
+        thinking: Boolean?
+    ): String {
         val intro = if (videoUrl == null && history.isNotEmpty()) {
             question + "\n\n（这是追问，不再重复上传视频：画面和你上一轮看到的是同一段，请沿用上文里的画面信息）"
         } else {
             question
         }
+        val fps = prefs.videoFps
         val content = JSONArray()
             .put(JSONObject().put("type", "text").put("text", intro))
         if (videoUrl != null) {
             content.put(
                 JSONObject().put("type", "video_url")
                     .put("video_url", JSONObject().put("url", videoUrl))
-                    .put("fps", VIDEO_FPS)
+                    .put("fps", fps)
             )
         }
         val messages = JSONArray()
@@ -307,6 +334,9 @@ class QwenVideoClient(private val prefs: Prefs) {
             .put("messages", messages)
             .put("temperature", 0.3)
             .put("stream", true)
+        if (thinking != null) {
+            payload.put("enable_thinking", thinking)
+        }
 
         val request = Request.Builder()
             .url(prefs.qwenChatEndpoint())

@@ -58,6 +58,12 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var sliderSeconds: Slider
     private lateinit var sliderFrames: Slider
+    private lateinit var sliderFps: Slider
+    private lateinit var tvFpsHint: TextView
+    private lateinit var tvThinkingHint: TextView
+    private lateinit var rbThinkingAuto: RadioButton
+    private lateinit var rbThinkingOff: RadioButton
+    private lateinit var rbThinkingOn: RadioButton
     private lateinit var etSeconds: TextInputEditText
     private lateinit var etFrames: TextInputEditText
     private lateinit var swSaveClip: SwitchCompat
@@ -130,6 +136,12 @@ class MainActivity : AppCompatActivity() {
         etAsrModel = findViewById(R.id.etAsrModel)
         sliderSeconds = findViewById(R.id.sliderSeconds)
         sliderFrames = findViewById(R.id.sliderFrames)
+        sliderFps = findViewById(R.id.sliderFps)
+        tvFpsHint = findViewById(R.id.tvFpsHint)
+        tvThinkingHint = findViewById(R.id.tvThinkingHint)
+        rbThinkingAuto = findViewById(R.id.rbThinkingAuto)
+        rbThinkingOff = findViewById(R.id.rbThinkingOff)
+        rbThinkingOn = findViewById(R.id.rbThinkingOn)
         etSeconds = findViewById(R.id.etSeconds)
         etFrames = findViewById(R.id.etFrames)
         swSaveClip = findViewById(R.id.swSaveClip)
@@ -189,6 +201,18 @@ class MainActivity : AppCompatActivity() {
             else -> rbAudioAuto.isChecked = true
         }
         updateAudioHint()
+
+        syncing = true
+        sliderFps.value = prefs.videoFps
+        syncing = false
+        when (prefs.thinkingMode) {
+            0 -> rbThinkingOff.isChecked = true
+            1 -> rbThinkingOn.isChecked = true
+            else -> rbThinkingAuto.isChecked = true
+        }
+        updateFpsHint()
+        updateThinkingHint()
+
         if (prefs.videoMode) rbVideo.isChecked = true else rbFrames.isChecked = true
         updateModeVisibility()
     }
@@ -197,6 +221,25 @@ class MainActivity : AppCompatActivity() {
         val video = rbVideo.isChecked
         groupFrames.visibility = if (video) View.GONE else View.VISIBLE
         groupVideo.visibility = if (video) View.VISIBLE else View.GONE
+    }
+
+    /**
+     * 视频抽帧频率提示：直接把「这段片段会变成多少帧」算给用户看，
+     * 因为首字延迟跟帧数成正比，光一个 fps 数字没有体感。
+     */
+    private fun updateFpsHint() {
+        val fps = sliderFps.value
+        val seconds = (etSeconds.text?.toString()?.toIntOrNull() ?: prefs.clipSeconds)
+        val frames = (seconds * fps).toInt().coerceAtLeast(1)
+        tvFpsHint.text = "%.1f 帧/秒 · %d 秒的片段约 %d 帧".format(fps, seconds, frames)
+    }
+
+    private fun updateThinkingHint() {
+        tvThinkingHint.text = when {
+            rbThinkingOff.isChecked -> "已关闭：请求带 enable_thinking=false，出字最快"
+            rbThinkingOn.isChecked -> "已开启：模型会先推理再回答，更准但明显更慢"
+            else -> "不传该参数（默认）：由模型自己决定，兼容性最好"
+        }
     }
 
     private fun updateQualityHint() {
@@ -230,6 +273,7 @@ class MainActivity : AppCompatActivity() {
             etSeconds.setSelection(text.length)
             syncing = false
             updateQualityHint()
+            updateFpsHint()
         }
         sliderFrames.addOnChangeListener { _, value, _ ->
             if (syncing) return@addOnChangeListener
@@ -239,6 +283,12 @@ class MainActivity : AppCompatActivity() {
             etFrames.setSelection(text.length)
             syncing = false
         }
+        sliderFps.addOnChangeListener { _, _, _ ->
+            if (syncing) return@addOnChangeListener
+            updateFpsHint()
+        }
+        findViewById<android.widget.RadioGroup>(R.id.rgThinking)
+            .setOnCheckedChangeListener { _, _ -> updateThinkingHint() }
         etSeconds.doAfterTextChanged { editable ->
             if (syncing) return@doAfterTextChanged
             val value = editable?.toString()?.toIntOrNull() ?: return@doAfterTextChanged
@@ -306,6 +356,12 @@ class MainActivity : AppCompatActivity() {
             rbAudioOn.isChecked -> 1
             rbAudioOff.isChecked -> 2
             else -> 0
+        }
+        prefs.videoFps = sliderFps.value
+        prefs.thinkingMode = when {
+            rbThinkingOff.isChecked -> 0
+            rbThinkingOn.isChecked -> 1
+            else -> -1
         }
 
         // 超出范围时把输入框拉回合法值，让用户看到实际生效的数字
