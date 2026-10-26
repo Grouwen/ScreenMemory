@@ -9,3 +9,13 @@
 .cxx
 local.properties
 app/build/
+
+# Release signing secrets and artifacts
+.signing/
+*.jks
+*.keystore
+keystore.properties
+
+# Local release artifacts
+/release/
+/_signing_helper/

@@ -3,6 +3,13 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+def releaseKeystorePropertiesFile = rootProject.file('.signing/keystore.properties')
+def releaseKeystoreProperties = new Properties()
+if (releaseKeystorePropertiesFile.exists()) {
+    releaseKeystorePropertiesFile.withInputStream { releaseKeystoreProperties.load(it) }
+}
+def hasReleaseSigning = releaseKeystorePropertiesFile.exists()
+
 android {
     namespace 'com.screenmemory.app'
     compileSdk 34
@@ -12,7 +19,18 @@ android {
         minSdk 29
         targetSdk 34
         versionCode 1
-        versionName "1.0"
+        versionName "1.0.0"
+    }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            release {
+                storeFile rootProject.file(releaseKeystoreProperties['storeFile'])
+                storePassword releaseKeystoreProperties['storePassword']
+                keyAlias releaseKeystoreProperties['keyAlias']
+                keyPassword releaseKeystoreProperties['keyPassword']
+            }
+        }
     }
 
     buildTypes {
@@ -22,6 +40,9 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 
