@@ -82,6 +82,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var rbAudioOn: RadioButton
     private lateinit var rbAudioOff: RadioButton
     private lateinit var tvAudioModeHint: TextView
+    private lateinit var rbQualityUltraLow: RadioButton
     private lateinit var rbQualitySaver: RadioButton
     private lateinit var rbQualityStandard: RadioButton
     private lateinit var rbQualitySharp: RadioButton
@@ -160,6 +161,7 @@ class MainActivity : AppCompatActivity() {
         rbAudioOn = findViewById(R.id.rbAudioOn)
         rbAudioOff = findViewById(R.id.rbAudioOff)
         tvAudioModeHint = findViewById(R.id.tvAudioModeHint)
+        rbQualityUltraLow = findViewById(R.id.rbQualityUltraLow)
         rbQualitySaver = findViewById(R.id.rbQualitySaver)
         rbQualityStandard = findViewById(R.id.rbQualityStandard)
         rbQualitySharp = findViewById(R.id.rbQualitySharp)
@@ -183,6 +185,7 @@ class MainActivity : AppCompatActivity() {
         when (prefs.qualityProfile) {
             0 -> rbQualitySaver.isChecked = true
             2 -> rbQualitySharp.isChecked = true
+            QualityProfile.ULTRA_SAVER_INDEX -> rbQualityUltraLow.isChecked = true
             else -> rbQualityStandard.isChecked = true
         }
         updateQualityHint()
@@ -244,6 +247,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateQualityHint() {
         val index = when {
+            rbQualityUltraLow.isChecked -> QualityProfile.ULTRA_SAVER_INDEX
             rbQualitySaver.isChecked -> 0
             rbQualitySharp.isChecked -> 2
             else -> 1
@@ -340,6 +344,7 @@ class MainActivity : AppCompatActivity() {
         prefs.clipSeconds = seconds
         prefs.frameCount = frames
         prefs.qualityProfile = when {
+            rbQualityUltraLow.isChecked -> QualityProfile.ULTRA_SAVER_INDEX
             rbQualitySaver.isChecked -> 0
             rbQualitySharp.isChecked -> 2
             else -> 1

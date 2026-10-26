@@ -4,6 +4,7 @@ import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
+import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.media.projection.MediaProjection
@@ -37,11 +38,13 @@ class ScreenRingRecorder(
     private val audioChannels: Int = 1,
     private val bitRate: Int = 3_000_000,
     private val fps: Int = 20,
+    private val preferSoftwareEncoder: Boolean = false,
     windowSeconds: Int = 30
 ) {
 
     companion object {
         private const val TAG = "ScreenRing"
+        private const val TIMING_TAG = "Timing"
         private const val MAX_BUFFER_BYTES = 160L * 1024 * 1024
         const val MIN_WINDOW_SECONDS = 5
         const val MAX_WINDOW_SECONDS = 60
@@ -71,7 +74,10 @@ class ScreenRingRecorder(
          * 视频直传时，窗口里还有旋转前 / 其他尺寸的画面，但 MP4 无法混轨。
          * 这种情况下只导出了最新方向，调用方需要提示用户片段被缩短了。
          */
-        val rotationTrimmed: Boolean = false
+        val rotationTrimmed: Boolean = false,
+        val videoBitRateBps: Long = 0,
+        val encoderName: String = "",
+        val bitrateMode: String = ""
     )
 
     private class AudioPeak(val ptsUs: Long, val value: Int)
@@ -82,7 +88,9 @@ class ScreenRingRecorder(
         val height: Int,
         val frames: ArrayList<Frame> = ArrayList(),
         var csd0: ByteBuffer? = null,
-        var csd1: ByteBuffer? = null
+        var csd1: ByteBuffer? = null,
+        val encoderName: String = "",
+        val bitrateMode: String = ""
     )
 
     class ClipPart(val file: File, val result: ClipResult)
@@ -92,7 +100,9 @@ class ScreenRingRecorder(
         val height: Int,
         val frames: List<Frame>,
         val csd0: ByteBuffer?,
-        val csd1: ByteBuffer?
+        val csd1: ByteBuffer?,
+        val encoderName: String,
+        val bitrateMode: String
     )
 
     private class ExportState(
@@ -102,6 +112,11 @@ class ScreenRingRecorder(
         val audioCsd: ByteBuffer?,
         val endUs: Long,
         val activeVideoEmpty: Boolean
+    )
+
+    private class VideoEncoderCandidate(
+        val name: String,
+        val software: Boolean
     )
 
     private val lock = Any()
@@ -131,6 +146,10 @@ class ScreenRingRecorder(
     private var audioCsd0: ByteBuffer? = null
 
     private var videoCodec: MediaCodec? = null
+    @Volatile
+    private var activeEncoderName = ""
+    @Volatile
+    private var activeBitrateMode = ""
     private var audioCodec: MediaCodec? = null
     private var inputSurface: Surface? = null
     private var virtualDisplay: VirtualDisplay? = null
@@ -198,11 +217,33 @@ class ScreenRingRecorder(
     }
 
     private fun startVideo() {
+        var lastError: Throwable? = null
+        for (candidate in videoEncoderCandidates()) {
+            val attempts = if (candidate.software) listOf(true) else listOf(true, false)
+            for (explicitVbr in attempts) {
+                try {
+                    startVideoCandidate(candidate, explicitVbr)
+                    return
+                } catch (t: Throwable) {
+                    lastError = t
+                    Log.w(
+                        TAG,
+                        "video encoder failed: ${candidate.name} software=${candidate.software} " +
+                            "explicitVbr=$explicitVbr",
+                        t
+                    )
+                    stopVideoPipeline(releaseDisplay = false)
+                }
+            }
+        }
+        throw IllegalStateException("没有可用的 AVC 视频编码器", lastError)
+    }
+
+    private fun startVideoCandidate(candidate: VideoEncoderCandidate, explicitVbr: Boolean) {
         val mime = MediaFormat.MIMETYPE_VIDEO_AVC
-        // 硬编码器默认多为 VBR：屏幕内容一变多，实际码率能飙到设定值的 2–5 倍，
-        // 直接后果就是「省流 15 秒」导出 20MB+。支持 CBR 的机型强制走 CBR 压住上限。
         val videoWidth = currentWidth
         val videoHeight = currentHeight
+        val maxEncodeFps = if (preferSoftwareEncoder) minOf(fps, 10) else fps
         val format = MediaFormat.createVideoFormat(mime, videoWidth, videoHeight).apply {
             setInteger(
                 MediaFormat.KEY_COLOR_FORMAT,
@@ -210,30 +251,33 @@ class ScreenRingRecorder(
             )
             setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
+            // KEY_FRAME_RATE 只是码控提示；这个 key 才要求 Surface 输入编码器丢弃超额帧。
+            setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, maxEncodeFps.toFloat())
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
         }
-        val codec = MediaCodec.createEncoderByType(mime)
-        val useCbr = try {
-            codec.codecInfo.getCapabilitiesForType(mime).encoderCapabilities
-                .isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
-        } catch (_: Throwable) {
-            false
-        }
-        if (useCbr) {
+        if (explicitVbr) {
             format.setInteger(
                 MediaFormat.KEY_BITRATE_MODE,
-                MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+                MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
             )
         }
+        val codec = MediaCodec.createByCodecName(candidate.name)
         Log.i(
             TAG,
-            "video ${videoWidth}x$videoHeight ${bitRate / 1000}kbps ${fps}fps mode=${if (useCbr) "cbr" else "vbr(未指定)"}"
+            "video ${videoWidth}x$videoHeight ${bitRate / 1000}kbps ${fps}fps " +
+                "maxEncoderFps=$maxEncodeFps " +
+                "encoder=${candidate.name} software=${candidate.software} " +
+                "mode=${if (explicitVbr) "VBR(explicit)" else "VBR(unspecified)"}"
         )
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         val surface = codec.createInputSurface()
         codec.start()
         videoCodec = codec
         inputSurface = surface
+        synchronized(lock) {
+            activeEncoderName = candidate.name
+            activeBitrateMode = if (explicitVbr) "VBR(explicit)" else "VBR(unspecified)"
+        }
 
         val display = virtualDisplay
         if (display == null) {
@@ -256,6 +300,38 @@ class ScreenRingRecorder(
 
         videoRunning.set(true)
         videoThread = Thread({ videoLoop(codec) }, "video-drain").also { it.start() }
+    }
+
+    private fun videoEncoderCandidates(): List<VideoEncoderCandidate> {
+        val mime = MediaFormat.MIMETYPE_VIDEO_AVC
+        val supported = try {
+            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+                .filter { it.isEncoder && it.supportedTypes.contains(mime) }
+                .filter { info ->
+                    try {
+                        info.getCapabilitiesForType(mime).colorFormats.contains(
+                            MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+                        )
+                    } catch (_: Throwable) {
+                        false
+                    }
+                }
+                .map {
+                    VideoEncoderCandidate(
+                        name = it.name,
+                        software = it.isSoftwareOnly
+                    )
+                }
+        } catch (t: Throwable) {
+            Log.w(TAG, "enumerate video encoders failed", t)
+            emptyList()
+        }
+        val software = supported.filter { it.software }
+        val hardware = supported.filterNot { it.software }
+        if (preferSoftwareEncoder && software.isEmpty()) {
+            Log.w(TAG, "没有可用的软件 AVC 编码器，直接使用硬件编码器")
+        }
+        return if (preferSoftwareEncoder) software + hardware else hardware + software
     }
 
     private fun startAudio() {
@@ -400,7 +476,9 @@ class ScreenRingRecorder(
                     height = currentHeight,
                     frames = ArrayList(videoFrames),
                     csd0 = videoCsd0?.duplicate(),
-                    csd1 = videoCsd1?.duplicate()
+                    csd1 = videoCsd1?.duplicate(),
+                    encoderName = activeEncoderName,
+                    bitrateMode = activeBitrateMode
                 )
             )
         }
@@ -641,7 +719,9 @@ class ScreenRingRecorder(
                         segment.height,
                         ArrayList(segment.frames),
                         segment.csd0?.duplicate(),
-                        segment.csd1?.duplicate()
+                        segment.csd1?.duplicate(),
+                        segment.encoderName,
+                        segment.bitrateMode
                     )
                 )
             }
@@ -653,7 +733,9 @@ class ScreenRingRecorder(
                     currentHeight,
                     ArrayList(videoFrames),
                     videoCsd0?.duplicate(),
-                    videoCsd1?.duplicate()
+                    videoCsd1?.duplicate(),
+                    activeEncoderName,
+                    activeBitrateMode
                 )
             )
         }
@@ -706,6 +788,9 @@ class ScreenRingRecorder(
         val base = vList[0].ptsUs
         val endPts = minOf(state.endUs, usable.last().ptsUs)
         val aList = state.audio.filter { it.ptsUs in base..endPts }
+        val videoBytes = vList.sumOf { it.data.size.toLong() }
+        val videoLastPts = vList.last().ptsUs
+        val videoDurationMs = (videoLastPts - base) / 1000
 
         outFile.parentFile?.mkdirs()
         if (outFile.exists()) outFile.delete()
@@ -772,12 +857,33 @@ class ScreenRingRecorder(
         val audioPeak = state.peaks
             .filter { it.ptsUs in base..lastPts }
             .maxOfOrNull { it.value } ?: 0
+        val actualVideoBitRate = if (videoDurationMs > 0) {
+            videoBytes * 8_000 / videoDurationMs
+        } else {
+            0
+        }
+        val actualVideoFps = if (videoDurationMs > 0) {
+            (vList.size - 1) * 1000.0 / videoDurationMs
+        } else {
+            0.0
+        }
+        Log.i(
+            TIMING_TAG,
+            "码率实测 encoder=${piece.encoderName} mode=${piece.bitrateMode} " +
+                "target=${bitRate / 1000}kbps actualVideo=${actualVideoBitRate / 1000}kbps " +
+                "fps=${"%.1f".format(actualVideoFps)} " +
+                "size=${piece.width}x${piece.height} duration=${videoDurationMs}ms " +
+                "file=${outFile.length() / 1024}KB"
+        )
         return ClipResult(
             ok = true,
             durationMs = durationMs,
             sizeBytes = outFile.length(),
             audioPeak = audioPeak,
-            rotationTrimmed = hasEarlier
+            rotationTrimmed = hasEarlier,
+            videoBitRateBps = actualVideoBitRate,
+            encoderName = piece.encoderName,
+            bitrateMode = piece.bitrateMode
         )
     }
 }

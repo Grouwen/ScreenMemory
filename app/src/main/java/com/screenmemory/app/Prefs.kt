@@ -82,10 +82,13 @@ class Prefs(context: Context) {
         get() = sp.getInt("frame_count", 8).coerceIn(1, 20)
         set(value) = sp.edit().putInt("frame_count", value.coerceIn(1, 20)).apply()
 
-    /** 画质档位：0 省流 / 1 标准 / 2 清晰 */
+    /** 画质档位：0 省流 / 1 标准 / 2 清晰 / 3 极低（编号保持不变以兼容旧配置） */
     var qualityProfile: Int
-        get() = sp.getInt("quality_profile", QualityProfile.DEFAULT_INDEX).coerceIn(0, 2)
-        set(value) = sp.edit().putInt("quality_profile", value.coerceIn(0, 2)).apply()
+        get() = sp.getInt("quality_profile", QualityProfile.DEFAULT_INDEX)
+            .coerceIn(0, QualityProfile.MAX_INDEX)
+        set(value) = sp.edit()
+            .putInt("quality_profile", value.coerceIn(0, QualityProfile.MAX_INDEX))
+            .apply()
 
     /** 当前生效的画质参数（分辨率/码率/抽帧尺寸/JPEG 质量） */
     fun quality(): QualityProfile = QualityProfile.of(qualityProfile)

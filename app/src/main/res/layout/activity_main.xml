@@ -717,6 +717,14 @@
                     android:orientation="horizontal">
 
                     <RadioButton
+                        android:id="@+id/rbQualityUltraLow"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="极低"
+                        android:textSize="14sp" />
+
+                    <RadioButton
                         android:id="@+id/rbQualitySaver"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
@@ -752,7 +760,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:lineSpacingExtra="2dp"
-                    android:text="画质是一个整体：同时决定录制分辨率、H.264 码率、抽帧尺寸和 JPEG 质量。只看 UI 和小字用「标准」，表格/代码/报错码用「清晰」，流量吃紧用「省流」。改完需要重新启动助手才生效——编码器参数在启动时锁定。\n\n视频直传模式下，每次提问都会上传整段录像，体积 ≈ 码率 × 保留时长（省流 15 秒约 2MB，标准 15 秒约 11MB）；抽帧模式下体积由帧数和 JPEG 质量决定，跟码率关系不大。"
+                    android:text="画质是一个整体：同时决定录制分辨率、H.264 码率、抽帧尺寸和 JPEG 质量。只看 UI 和小字用「标准」，表格/代码/报错码用「清晰」，流量吃紧用「省流」；只有弱网且能接受大号字变糊时才用「极低」。改完需要重新启动助手才生效——编码器参数在启动时锁定。\n\n视频直传模式下，每次提问都会上传整段录像，体积 ≈ 码率 × 保留时长（15 秒：极低约 0.9MB，省流约 2.1MB，标准约 10.7MB）；抽帧模式下体积由帧数和 JPEG 质量决定，跟码率关系不大。"
                     android:textSize="11sp" />
 
                 <TextView

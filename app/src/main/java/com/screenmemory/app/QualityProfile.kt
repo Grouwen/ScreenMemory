@@ -33,18 +33,31 @@ enum class QualityProfile(
     STANDARD(1080, 6_000_000, 1080, 80),
 
     /** 清晰：码率翻倍，压缩噪点最少，适合表格/代码/小字 */
-    SHARP(1080, 10_000_000, 1080, 90);
+    SHARP(1080, 10_000_000, 1080, 90),
 
-    /** 30 秒片段的大致体积（MB） */
-    fun estimatedSizeMb(seconds: Int): Int =
-        (videoBitRate.toLong() * seconds / 8 / 1024 / 1024).toInt()
+    /**
+     * 极低：用于弱网或流量非常紧张的场景。
+     * 480p / 0.5Mbps 仍能辨认大号板书，但密集公式和小字会明显变糊。
+     */
+    ULTRA_SAVER(480, 500_000, 480, 60);
+
+    /** 低码率档位优先尝试软件编码器，避免部分硬件 AVC 编码器忽略目标码率。 */
+    val preferSoftwareEncoder: Boolean
+        get() = this == ULTRA_SAVER || this == SAVER
+
+    /** 按目标码率估算的片段体积（MB），包含低码率档位的小数 */
+    fun estimatedSizeMb(seconds: Int): Double =
+        videoBitRate.toDouble() * seconds / 8.0 / 1024.0 / 1024.0
 
     fun summary(seconds: Int): String =
         "短边 ${shortSide}px · ${"%.1f".format(videoBitRate / 1_000_000f)}Mbps · " +
-            "抽帧 ${frameShortSide}px/q$frameQuality · ${seconds} 秒约 ${estimatedSizeMb(seconds)}MB"
+            "抽帧 ${frameShortSide}px/q$frameQuality · ${seconds} 秒约 " +
+            "${"%.1f".format(estimatedSizeMb(seconds))}MB"
 
     companion object {
         const val DEFAULT_INDEX = 1
+        const val ULTRA_SAVER_INDEX = 3
+        const val MAX_INDEX = ULTRA_SAVER_INDEX
 
         fun of(index: Int): QualityProfile = values().getOrElse(index) { STANDARD }
     }

@@ -273,6 +273,7 @@ class CaptureService : Service(), OverlayController.Listener {
             audioSampleRate = sampleRate,
             bitRate = bitRate,
             fps = 20,
+            preferSoftwareEncoder = quality.preferSoftwareEncoder,
             windowSeconds = prefs.clipSeconds
         )
         try {
