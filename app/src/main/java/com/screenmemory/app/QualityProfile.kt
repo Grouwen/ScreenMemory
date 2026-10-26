@@ -20,8 +20,14 @@ enum class QualityProfile(
     /** 抽帧 JPEG 质量 */
     val frameQuality: Int
 ) {
-    /** 省流量：画质够看，适合流量敏感 */
-    SAVER(720, 2_500_000, 720, 65),
+    /**
+     * 省流量：给「视频直传 + 短窗口」用。
+     *
+     * 录的是屏幕内容（大片纯色 + 文字），熵远低于实拍，1.2 Mbps 在 720 短边下
+     * 讲稿、PPT、板书都还清楚；实测硬编码器即便 CBR 也会有些许超发，
+     * 所以目标值特意留了余量。
+     */
+    SAVER(720, 1_200_000, 720, 65),
 
     /** 标准：1080p 录制 + q80 抽帧，小字能认清 */
     STANDARD(1080, 6_000_000, 1080, 80),
@@ -34,8 +40,8 @@ enum class QualityProfile(
         (videoBitRate.toLong() * seconds / 8 / 1024 / 1024).toInt()
 
     fun summary(seconds: Int): String =
-        "短边 ${shortSide}px · ${videoBitRate / 1_000_000}Mbps · 抽帧 ${frameShortSide}px/q$frameQuality · " +
-            "${seconds} 秒约 ${estimatedSizeMb(seconds)}MB"
+        "短边 ${shortSide}px · ${"%.1f".format(videoBitRate / 1_000_000f)}Mbps · " +
+            "抽帧 ${frameShortSide}px/q$frameQuality · ${seconds} 秒约 ${estimatedSizeMb(seconds)}MB"
 
     companion object {
         const val DEFAULT_INDEX = 1
