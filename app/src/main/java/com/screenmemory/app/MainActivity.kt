@@ -319,6 +319,9 @@ class MainActivity : AppCompatActivity() {
         findViewById<android.widget.RadioGroup>(R.id.rgMode).setOnCheckedChangeListener { _, _ ->
             updateModeVisibility()
         }
+        findViewById<TextView>(R.id.tvModeInfo).setOnClickListener {
+            showModeInfoDialog()
+        }
         findViewById<android.widget.RadioGroup>(R.id.rgAudioMode).setOnCheckedChangeListener { _, _ ->
             updateAudioHint()
         }
@@ -331,6 +334,14 @@ class MainActivity : AppCompatActivity() {
             startService(CaptureService.stopIntent(this))
             Handler(Looper.getMainLooper()).postDelayed({ refreshStatus() }, 600)
         }
+    }
+
+    private fun showModeInfoDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("CHARCHAR")
+            .setMessage("CHARCHAR")
+            .setPositiveButton("知道了", null)
+            .show()
     }
 
     private fun saveSettings() {

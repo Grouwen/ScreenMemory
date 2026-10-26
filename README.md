@@ -51,7 +51,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 设置页按「画面怎么发给模型」拆成**三块互相独立的配置**，切换模式只影响用哪块，值各自保存、互不覆盖。每个输入框下面都有同样的说明（`helperText`），这里再汇总一遍：
 
-#### ① 抽帧图片（默认，OpenAI 兼容）
+#### ① 抽帧图片（OpenAI 兼容）
 
 | 字段 | 含义 | 示例 |
 | --- | --- | --- |
@@ -141,9 +141,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ### 2.5 视频直传模式（仅千问）
 
-默认是「抽帧图片」：把最近 N 秒的画面抽成 1–20 张 JPEG，塞进任意 OpenAI 兼容的 `chat/completions`（这模式不挑厂商）。
+新版默认是「视频直传（千问）」。如果要使用其他 OpenAI 兼容的视觉模型，可以切换到「抽帧图片」：把最近 N 秒的画面抽成 1–20 张 JPEG，再发给支持图片输入的 `chat/completions`。
 
-切成「视频直传（千问）」后，走的是**阿里云百炼的本地文件上传** —— 不用你找图床，也不用把十几 MB 的 base64 塞进请求体。两步流程对应两份官方文档：
+「视频直传（千问）」走的是**阿里云百炼的本地文件上传** —— 不用你找图床，也不用把十几 MB 的 base64 塞进请求体。两步流程对应两份官方文档：
 
 ```
 ① GET  {上传凭证 URL}?action=getPolicy&model=qwen-vl-max

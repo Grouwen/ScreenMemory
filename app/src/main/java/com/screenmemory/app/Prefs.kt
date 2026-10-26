@@ -100,7 +100,7 @@ class Prefs(context: Context) {
 
     /** true = 视频直传（千问本地上传）；false = 抽帧图片 */
     var videoMode: Boolean
-        get() = sp.getBoolean("video_mode", false)
+        get() = sp.getBoolean("video_mode", true)
         set(value) = sp.edit().putBoolean("video_mode", value).apply()
 
     /** 视频对话接口完整地址（OpenAI 兼容的 /chat/completions） */

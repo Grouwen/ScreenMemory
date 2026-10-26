@@ -139,12 +139,34 @@
                 android:orientation="vertical"
                 android:padding="16dp">
 
-                <TextView
-                    android:layout_width="wrap_content"
+                <LinearLayout
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="画面怎么发给模型"
-                    android:textSize="13sp"
-                    android:textStyle="bold" />
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="画面怎么发给模型"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/tvModeInfo"
+                        android:layout_width="28dp"
+                        android:layout_height="28dp"
+                        android:background="@drawable/bg_info_circle"
+                        android:clickable="true"
+                        android:contentDescription="查看画面发送模式说明"
+                        android:focusable="true"
+                        android:fontFamily="sans-serif-medium"
+                        android:gravity="center"
+                        android:text="?"
+                        android:textColor="?attr/colorPrimary"
+                        android:textSize="15sp" />
+                </LinearLayout>
 
                 <RadioGroup
                     android:id="@+id/rgMode"
@@ -158,7 +180,6 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:checked="true"
                         android:text="抽帧图片"
                         android:textSize="14sp" />
 
@@ -167,16 +188,10 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
+                        android:checked="true"
                         android:text="视频直传（千问）"
                         android:textSize="14sp" />
                 </RadioGroup>
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:lineSpacingExtra="2dp"
-                    android:text="两种模式各有一套完全独立的接口配置，切换时只影响「画面怎么发」，录制部分共用一个环形缓冲。"
-                    android:textSize="11sp" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
