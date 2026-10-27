@@ -17,7 +17,6 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
-import android.text.method.ArrowKeyMovementMethod
 import android.util.DisplayMetrics
 import android.util.TypedValue
 import android.view.Gravity
@@ -780,9 +779,12 @@ class OverlayController(
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
             setPadding(dp(4), 0, dp(4), dp(2))
         }
-        val bubble = TextView(themedContext).apply {
+        val bubble = EditText(themedContext).apply {
             maxWidth = minOf(metrics.widthPixels - dp(64), dp(420)).coerceAtLeast(dp(180))
             setTextIsSelectable(true)
+            isCursorVisible = false
+            setShowSoftInputOnFocus(false)
+            setSelectAllOnFocus(false)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
             setLineSpacing(dp(3).toFloat(), 1f)
             setPadding(dp(13), dp(9), dp(13), dp(9))
@@ -792,9 +794,9 @@ class OverlayController(
             }
             setTextColor(if (isUser) Color.WHITE else 0xFF12131A.toInt())
             if (isUser || streaming) {
-                text = Preview.plain(
+                setText(Preview.plain(
                     if (streaming && message.isBlank()) "正在等待回答…" else message
-                )
+                ))
             } else {
                 renderMarkdown(this, message)
             }
@@ -829,7 +831,10 @@ class OverlayController(
     private fun enableTextSelection(view: TextView) {
         view.setTextIsSelectable(true)
         view.isFocusableInTouchMode = true
-        view.movementMethod = ArrowKeyMovementMethod.getInstance()
+        if (view is EditText) {
+            view.isCursorVisible = false
+            view.setShowSoftInputOnFocus(false)
+        }
     }
 
     /** 渲染降级链：完整版 → 无公式版 → 纯文本，任何一级失败都不能让答案消失 */

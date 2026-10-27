@@ -4,7 +4,6 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
 import android.util.TypedValue
-import android.text.method.ArrowKeyMovementMethod
 import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.InputMethodManager
@@ -191,13 +190,16 @@ class HistoryDetailActivity : AppCompatActivity() {
             setTextColor(themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant))
             setPadding(dp(4), 0, dp(4), dp(3))
         }
-        val bubble = TextView(this).apply {
+        val bubble = EditText(this).apply {
             maxWidth = minOf(
                 (resources.displayMetrics.widthPixels * 0.82f).toInt(),
                 dp(560)
             )
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setTextIsSelectable(true)
+            isCursorVisible = false
+            setShowSoftInputOnFocus(false)
+            setSelectAllOnFocus(false)
             setLineSpacing(dp(4).toFloat(), 1f)
             setPadding(dp(14), dp(10), dp(14), dp(10))
             setBackgroundResource(
@@ -213,11 +215,11 @@ class HistoryDetailActivity : AppCompatActivity() {
                 )
             )
             if (isUser || streaming) {
-                this.text = if (streaming && message.isBlank()) {
+                setText(if (streaming && message.isBlank()) {
                     "正在回答…"
                 } else {
                     Preview.plain(message)
-                }
+                })
             } else {
                 renderAiMarkdown(this, message)
             }
@@ -293,7 +295,10 @@ class HistoryDetailActivity : AppCompatActivity() {
     private fun enableTextSelection(view: TextView) {
         view.setTextIsSelectable(true)
         view.isFocusableInTouchMode = true
-        view.movementMethod = ArrowKeyMovementMethod.getInstance()
+        if (view is EditText) {
+            view.isCursorVisible = false
+            view.setShowSoftInputOnFocus(false)
+        }
     }
 
     // ------------------------------------------------------------------ 继续追问
