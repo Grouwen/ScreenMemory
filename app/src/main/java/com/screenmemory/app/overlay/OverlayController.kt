@@ -1,6 +1,8 @@
 package com.screenmemory.app.overlay
 
 import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ComponentCallbacks
 import android.content.Context
 import android.content.res.Configuration
@@ -818,8 +820,42 @@ class OverlayController(
             }
             enableTextSelection(this)
         }
-        column.addView(
+        val meta = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = if (isUser) Gravity.END else Gravity.START
+        }
+        meta.addView(
             role,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+        meta.addView(
+            TextView(context).apply {
+                text = "复制"
+                setTextColor(0xFF2F6BFF.toInt())
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
+                setPadding(dp(6), 0, dp(4), dp(2))
+                setOnClickListener {
+                    val editable = bubble.text
+                    val start = bubble.selectionStart.coerceAtLeast(0)
+                    val end = bubble.selectionEnd.coerceAtLeast(0)
+                    val selected = if (end > start) {
+                        editable.subSequence(start, end).toString()
+                    } else {
+                        editable.toString()
+                    }
+                    copyToClipboard(selected)
+                }
+            },
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+        column.addView(
+            meta,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -864,6 +900,20 @@ class OverlayController(
         if (view is EditText) {
             view.isCursorVisible = false
             view.setShowSoftInputOnFocus(false)
+        }
+    }
+
+    private fun copyToClipboard(text: String) {
+        if (text.isBlank()) {
+            Toast.makeText(context, "暂无可复制内容", Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("ScreenMemory", text))
+            Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+        } catch (_: Throwable) {
+            Toast.makeText(context, "复制失败", Toast.LENGTH_SHORT).show()
         }
     }
 
