@@ -12,6 +12,7 @@ import android.view.ContextThemeWrapper
 import com.screenmemory.app.R
 import com.screenmemory.app.chat.ChatTurn
 import com.screenmemory.app.chat.TokenUsage
+import com.screenmemory.app.ui.MathSymbolBar
 import com.screenmemory.app.util.Latex
 import com.screenmemory.app.util.Preview
 import android.graphics.PixelFormat
@@ -609,6 +610,14 @@ class OverlayController(
         }
         inputView = input
         root.addView(input)
+
+        root.addView(
+            MathSymbolBar(themedContext) { inputView },
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
 
         // 按钮行
         val row = LinearLayout(context).apply {

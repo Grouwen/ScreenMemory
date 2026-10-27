@@ -20,6 +20,7 @@ import com.screenmemory.app.chat.Conversation
 import com.screenmemory.app.chat.TokenUsage
 import com.screenmemory.app.net.LlmClient
 import com.screenmemory.app.net.QwenVideoClient
+import com.screenmemory.app.ui.MathSymbolBar
 import com.screenmemory.app.util.Latex
 import com.screenmemory.app.util.Preview
 import io.noties.markwon.Markwon
@@ -113,6 +114,9 @@ class HistoryDetailActivity : AppCompatActivity() {
         send = findViewById(R.id.btnFollowSend)
         followStatus = findViewById(R.id.tvFollowStatus)
         findViewById<TextView>(R.id.tvBack).setOnClickListener { finish() }
+        findViewById<LinearLayout>(R.id.mathKeyboardHost).addView(
+            MathSymbolBar(this) { input }
+        )
 
         val id = intent.getLongExtra(EXTRA_ID, 0L)
         val loaded = ChatStore(this).loadAll().firstOrNull { it.id == id }
