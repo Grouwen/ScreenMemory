@@ -27,16 +27,13 @@ class MathSymbolBar(
 
     init {
         orientation = VERTICAL
-        setPadding(0, dp(4), 0, dp(6))
+        setPadding(0, dp(3), 0, dp(3))
         addRow(
             listOf(
                 "+", "−", "×", "÷", "±", "=", "≠", "≈", "<", "≤", ">", "≥",
                 "(", ")", "[", "]", "{", "}", "^", "_", "√", "π", "∞", "°", "%",
                 "α", "β", "γ", "θ", "Δ"
-            ).map { Symbol(it) }
-        )
-        addRow(
-            listOf(
+            ).map { Symbol(it) } + listOf(
                 Symbol("sin", "sin"),
                 Symbol("cos", "cos"),
                 Symbol("tan", "tan"),
@@ -65,17 +62,17 @@ class MathSymbolBar(
                     gravity = Gravity.CENTER
                     isFocusable = false
                     setTextColor(themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant))
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                    minWidth = dp(36)
-                    setPadding(dp(9), 0, dp(9), 0)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                    minWidth = dp(30)
+                    setPadding(dp(7), 0, dp(7), 0)
                     background = GradientDrawable().apply {
-                        cornerRadius = dp(8).toFloat()
+                        cornerRadius = dp(7).toFloat()
                         setColor(themeColor(com.google.android.material.R.attr.colorSurfaceVariant))
                     }
                     setOnClickListener { insert(symbol) }
                 },
-                LayoutParams(LayoutParams.WRAP_CONTENT, dp(32)).apply {
-                    marginEnd = dp(5)
+                LayoutParams(LayoutParams.WRAP_CONTENT, dp(29)).apply {
+                    marginEnd = dp(4)
                 }
             )
         }
@@ -84,7 +81,7 @@ class MathSymbolBar(
                 isHorizontalScrollBarEnabled = false
                 addView(row)
             },
-            LayoutParams(LayoutParams.MATCH_PARENT, dp(36))
+            LayoutParams(LayoutParams.MATCH_PARENT, dp(31))
         )
     }
 

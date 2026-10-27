@@ -1,6 +1,7 @@
 package com.screenmemory.app.overlay
 
 import android.annotation.SuppressLint
+import android.app.Dialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentCallbacks
@@ -82,6 +83,8 @@ class OverlayController(
     private var renderedTurns: List<ChatTurn> = emptyList()
     private var renderedPendingQuestion: String? = null
     private var inputView: EditText? = null
+    private var mathBar: MathSymbolBar? = null
+    private var mathToggle: TextView? = null
     private var holdView: TextView? = null
     private var sendView: TextView? = null
     private var headerSubtitle: TextView? = null
@@ -454,6 +457,17 @@ class OverlayController(
         }
     }
 
+    /** 输入框上方的“∑ 符号”开关：展开/收起数学符号栏 */
+    private fun toggleMathBar() {
+        val bar = mathBar ?: return
+        val show = bar.visibility != View.VISIBLE
+        bar.visibility = if (show) View.VISIBLE else View.GONE
+        mathToggle?.apply {
+            text = if (show) "∑ 收起" else "∑ 符号"
+            contentDescription = if (show) "收起数学符号栏" else "展开数学符号栏"
+        }
+    }
+
     /** 面板销毁后清掉所有子视图引用，避免状态栏/答案写到一个已经不在窗口里的 View 上 */
     private fun clearViewRefs() {
         statusView = null
@@ -464,6 +478,8 @@ class OverlayController(
         renderedTurns = emptyList()
         renderedPendingQuestion = null
         inputView = null
+        mathBar = null
+        mathToggle = null
         holdView = null
         sendView = null
         headerSubtitle = null
@@ -609,15 +625,54 @@ class OverlayController(
             )
         }
         inputView = input
-        root.addView(input)
 
+        // 数学符号栏的开关放在聊天输入框上方；默认收起，避免挤占对话区
+        val mathToggleRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            setPadding(0, dp(2), 0, dp(1))
+        }
+        val toggle = TextView(context).apply {
+            text = "∑ 符号"
+            gravity = Gravity.CENTER
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            setTextColor(0xFF2F6BFF.toInt())
+            setPadding(dp(9), dp(3), dp(9), dp(3))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(9).toFloat()
+                setColor(0xFFE8EFFF.toInt())
+            }
+            contentDescription = "展开数学符号栏"
+            setOnClickListener { toggleMathBar() }
+        }
+        mathToggle = toggle
+        mathToggleRow.addView(
+            toggle,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
         root.addView(
-            MathSymbolBar(themedContext) { inputView },
+            mathToggleRow,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
         )
+
+        val symbols = MathSymbolBar(themedContext) { inputView }.apply {
+            visibility = View.GONE
+        }
+        mathBar = symbols
+        root.addView(
+            symbols,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+        root.addView(input)
 
         // 按钮行
         val row = LinearLayout(context).apply {
@@ -860,6 +915,10 @@ class OverlayController(
             }
             enableTextSelection(this)
         }
+        bubble.setOnLongClickListener {
+            showTextSelectionDialog(bubble.text.toString())
+            true
+        }
         val meta = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = if (isUser) Gravity.END else Gravity.START
@@ -940,6 +999,67 @@ class OverlayController(
         if (view is EditText) {
             view.isCursorVisible = false
             view.setShowSoftInputOnFocus(false)
+        }
+    }
+
+    private fun showTextSelectionDialog(text: String) {
+        val dialog = Dialog(themedContext)
+        val content = LinearLayout(themedContext).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(14), dp(18), dp(14))
+            setBackgroundColor(0xFFFFFFFF.toInt())
+        }
+        content.addView(
+            TextView(themedContext).apply {
+                setText("选择要复制的文字")
+                setTextColor(0xFF12131A.toInt())
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            }
+        )
+        val selectable = TextView(themedContext).apply {
+            setText(text)
+            setTextIsSelectable(true)
+            setTextColor(0xFF12131A.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setLineSpacing(dp(4).toFloat(), 1f)
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            setBackgroundColor(0xFFF2F3F7.toInt())
+        }
+        content.addView(
+            ScrollView(themedContext).apply {
+                addView(selectable)
+            },
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(320)
+            ).apply { topMargin = dp(10); bottomMargin = dp(10) }
+        )
+        content.addView(
+            TextView(themedContext).apply {
+                setText("关闭")
+                gravity = Gravity.CENTER
+                setTextColor(0xFFFFFFFF.toInt())
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                setPadding(0, dp(10), 0, dp(10))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(12).toFloat()
+                    setColor(0xFF2F6BFF.toInt())
+                }
+                setOnClickListener { dialog.dismiss() }
+            }
+        )
+        dialog.setContentView(content)
+        dialog.window?.apply {
+            setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setDimAmount(0f)
+            setGravity(Gravity.CENTER)
+            setLayout((metrics.widthPixels * 0.9f).toInt(), WindowManager.LayoutParams.WRAP_CONTENT)
+            addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL)
+        }
+        dialog.show()
+        selectable.post {
+            selectable.performLongClick()
         }
     }
 
