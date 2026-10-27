@@ -543,8 +543,13 @@ class MainActivity : AppCompatActivity() {
             val item = inflater.inflate(R.layout.item_history, historyList, false)
             item.findViewById<TextView>(R.id.tvItemTitle).text =
                 historyTitle(conv.turns.firstOrNull()?.answer.orEmpty())
-            item.findViewById<TextView>(R.id.tvItemMeta).text =
-                format.format(Date(conv.id)) + " · " + conv.turns.size + " 轮"
+            item.findViewById<TextView>(R.id.tvItemMeta).text = buildString {
+                append(format.format(Date(conv.id)))
+                append(" · ").append(conv.turns.size).append(" 轮")
+                if (conv.totalTokens > 0) {
+                    append(" · 共 ").append(conv.totalTokens).append(" tokens")
+                }
+            }
             item.findViewById<TextView>(R.id.tvItemQuestion).text =
                 Preview.plain(
                     conv.turns.firstOrNull()?.question?.trim().orEmpty()
@@ -554,6 +559,9 @@ class MainActivity : AppCompatActivity() {
                     conv.turns.lastOrNull()?.answer?.trim()?.replace('\n', ' ').orEmpty()
                 ).ifBlank { "（没有回答）" }
             item.setOnClickListener { openHistoryDetail(conv) }
+            item.findViewById<TextView>(R.id.tvItemDelete).setOnClickListener {
+                confirmDeleteConversation(store, conv)
+            }
             // 使用 XML 中定义的卡片外边距，让相邻记录保持清晰间距。
             historyList.addView(item)
         }
@@ -584,6 +592,21 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("删除") { _, _ ->
                 store.clear()
                 refreshHistory()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun confirmDeleteConversation(store: ChatStore, conv: Conversation) {
+        AlertDialog.Builder(this)
+            .setTitle("删除这段对话？")
+            .setMessage("这段对话及其中保存的 token 统计会被删除，无法撤销。")
+            .setPositiveButton("删除") { _, _ ->
+                if (store.delete(conv.id)) {
+                    refreshHistory()
+                } else {
+                    toast("删除失败，请重试")
+                }
             }
             .setNegativeButton("取消", null)
             .show()

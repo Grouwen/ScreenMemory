@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
 import android.util.TypedValue
+import android.text.method.ArrowKeyMovementMethod
 import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.InputMethodManager
@@ -17,6 +18,7 @@ import androidx.core.content.ContextCompat
 import com.screenmemory.app.chat.ChatStore
 import com.screenmemory.app.chat.ChatTurn
 import com.screenmemory.app.chat.Conversation
+import com.screenmemory.app.chat.TokenUsage
 import com.screenmemory.app.net.LlmClient
 import com.screenmemory.app.net.QwenVideoClient
 import com.screenmemory.app.util.Latex
@@ -128,7 +130,13 @@ class HistoryDetailActivity : AppCompatActivity() {
 
         send.setOnClickListener { sendFollowUp() }
         renderConversation()
-        followStatus.text = "可以接着问 · 共 ${conv.turns.size} 轮（不再附图，只依据上面的对话）"
+        followStatus.text = buildString {
+            append("可以接着问 · 共 ${conv.turns.size} 轮")
+            if (conv.totalTokens > 0) {
+                append(" · 累计 ${TokenUsage(totalTokens = conv.totalTokens).compactLabel()}")
+            }
+            append("（不再附图，只依据上面的对话）")
+        }
     }
 
     override fun onDestroy() {
@@ -146,7 +154,7 @@ class HistoryDetailActivity : AppCompatActivity() {
         } else {
             for (turn in conv.turns) {
                 addMessage(turn.question, isUser = true)
-                addMessage(turn.answer, isUser = false)
+                addMessage(turn.answer, isUser = false, usage = turn.usage)
             }
         }
         scrollDown()
@@ -155,7 +163,8 @@ class HistoryDetailActivity : AppCompatActivity() {
     private fun addMessage(
         message: String,
         isUser: Boolean,
-        streaming: Boolean = false
+        streaming: Boolean = false,
+        usage: TokenUsage? = null
     ): TextView {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -172,7 +181,12 @@ class HistoryDetailActivity : AppCompatActivity() {
             gravity = if (isUser) Gravity.END else Gravity.START
         }
         val role = TextView(this).apply {
-            text = if (isUser) "你" else "AI 助手"
+            text = buildString {
+                append(if (isUser) "你" else "AI 助手")
+                if (!isUser && usage?.isKnown == true) {
+                    append(" · ").append(usage.compactLabel())
+                }
+            }
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             setTextColor(themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant))
             setPadding(dp(4), 0, dp(4), dp(3))
@@ -207,6 +221,7 @@ class HistoryDetailActivity : AppCompatActivity() {
             } else {
                 renderAiMarkdown(this, message)
             }
+            enableTextSelection(this)
         }
         column.addView(
             role,
@@ -244,12 +259,14 @@ class HistoryDetailActivity : AppCompatActivity() {
             }
         }
         view.text = Preview.plain(text)
+        enableTextSelection(view)
     }
 
     /** 流式阶段只更新最后一个 AI 气泡，避免每个 token 都重建整段对话。 */
     private fun renderStreaming(answer: String) {
         val view = pendingAnswerView ?: return
         view.text = Preview.plain(answer.ifBlank { "正在回答…" })
+        enableTextSelection(view)
         scrollDown()
     }
 
@@ -272,6 +289,12 @@ class HistoryDetailActivity : AppCompatActivity() {
         value.toFloat(),
         resources.displayMetrics
     ).toInt()
+
+    private fun enableTextSelection(view: TextView) {
+        view.setTextIsSelectable(true)
+        view.isFocusableInTouchMode = true
+        view.movementMethod = ArrowKeyMovementMethod.getInstance()
+    }
 
     // ------------------------------------------------------------------ 继续追问
 
@@ -332,16 +355,22 @@ class HistoryDetailActivity : AppCompatActivity() {
                 conv.turns.add(
                     ChatTurn(
                         question = question,
-                        answer = answer.ifBlank { "模型没有返回内容" },
+                        answer = answer.text.ifBlank { "模型没有返回内容" },
                         at = System.currentTimeMillis(),
-                        withMedia = false
+                        withMedia = false,
+                        usage = answer.usage
                     )
                 )
                 withContext(Dispatchers.IO) { ChatStore(this@HistoryDetailActivity).save(conv) }
 
                 input.setText("")
                 renderConversation()
-                followStatus.text = "已追问 · 现在是第 ${conv.turns.size} 轮"
+                followStatus.text = buildString {
+                    append("已追问 · 现在是第 ${conv.turns.size} 轮")
+                    if (conv.totalTokens > 0) {
+                        append(" · 累计 ${TokenUsage(totalTokens = conv.totalTokens).compactLabel()}")
+                    }
+                }
             } catch (t: Throwable) {
                 Log.e(TAG, "follow up failed", t)
                 followStatus.text = "追问失败：${t.message}"

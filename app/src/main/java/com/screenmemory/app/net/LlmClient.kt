@@ -1,5 +1,6 @@
 package com.screenmemory.app.net
 
+import android.util.Log
 import com.screenmemory.app.Prefs
 import com.screenmemory.app.chat.ChatTurn
 import okhttp3.MediaType.Companion.toMediaType
@@ -18,6 +19,10 @@ import java.util.concurrent.TimeUnit
  * 硅基流动、DeepSeek 等）都提供兼容端点，改 Base URL 即可。
  */
 class LlmClient(private val prefs: Prefs) {
+
+    private companion object {
+        const val TAG = "LlmClient"
+    }
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -67,7 +72,7 @@ class LlmClient(private val prefs: Prefs) {
         systemPrompt: String,
         onDelta: (String) -> Unit = {},
         history: List<ChatTurn> = emptyList()
-    ): String {
+    ): ModelAnswer {
         val key = prefs.apiKey.trim()
         if (key.isEmpty()) throw IOException("请先在设置里填写 API Key")
         val url = prefs.chatEndpoint()
@@ -109,6 +114,26 @@ class LlmClient(private val prefs: Prefs) {
             .put("temperature", 0.4)
             .put("stream", true)
 
+        val payloadWithUsage = JSONObject(payload.toString())
+            .put("stream_options", JSONObject().put("include_usage", true))
+        return try {
+            executeChat(url, key, payloadWithUsage, onDelta)
+        } catch (t: Throwable) {
+            if (t.message?.contains("HTTP 400") == true) {
+                Log.w(TAG, "stream usage unsupported, retrying without it", t)
+                executeChat(url, key, payload, onDelta)
+            } else {
+                throw t
+            }
+        }
+    }
+
+    private fun executeChat(
+        url: String,
+        key: String,
+        payload: JSONObject,
+        onDelta: (String) -> Unit
+    ): ModelAnswer {
         val request = Request.Builder()
             .url(url)
             .addHeader("Authorization", "Bearer $key")

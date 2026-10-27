@@ -9,6 +9,7 @@ import android.util.Log
 import android.view.ContextThemeWrapper
 import com.screenmemory.app.R
 import com.screenmemory.app.chat.ChatTurn
+import com.screenmemory.app.chat.TokenUsage
 import com.screenmemory.app.util.Latex
 import com.screenmemory.app.util.Preview
 import android.graphics.PixelFormat
@@ -16,6 +17,7 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
+import android.text.method.ArrowKeyMovementMethod
 import android.util.DisplayMetrics
 import android.util.TypedValue
 import android.view.Gravity
@@ -725,7 +727,7 @@ class OverlayController(
                 pendingAnswerView = null
                 for (turn in snapshot) {
                     addMessage(turn.question, isUser = true)
-                    addMessage(turn.answer, isUser = false)
+                    addMessage(turn.answer, isUser = false, usage = turn.usage)
                 }
                 if (pendingQuestion != null) {
                     addMessage(pendingQuestion, isUser = true)
@@ -741,6 +743,7 @@ class OverlayController(
                 pendingAnswerView?.text = Preview.plain(
                     pendingAnswer.orEmpty().ifBlank { "正在等待回答…" }
                 )
+                pendingAnswerView?.let { enableTextSelection(it) }
             }
             scroll.visibility = View.VISIBLE
             scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
@@ -750,7 +753,8 @@ class OverlayController(
     private fun addMessage(
         message: String,
         isUser: Boolean,
-        streaming: Boolean = false
+        streaming: Boolean = false,
+        usage: TokenUsage? = null
     ): TextView {
         val messages = messageList ?: error("message list not initialized")
         val row = LinearLayout(context).apply {
@@ -766,7 +770,12 @@ class OverlayController(
             gravity = if (isUser) Gravity.END else Gravity.START
         }
         val role = TextView(context).apply {
-            text = if (isUser) "你" else "AI 助手"
+            text = buildString {
+                append(if (isUser) "你" else "AI 助手")
+                if (!isUser && usage?.isKnown == true) {
+                    append(" · ").append(usage.compactLabel())
+                }
+            }
             setTextColor(0xFF8A8F9C.toInt())
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
             setPadding(dp(4), 0, dp(4), dp(2))
@@ -789,6 +798,7 @@ class OverlayController(
             } else {
                 renderMarkdown(this, message)
             }
+            enableTextSelection(this)
         }
         column.addView(
             role,
@@ -813,6 +823,13 @@ class OverlayController(
         )
         messages.addView(row)
         return bubble
+    }
+
+    /** 确保在非 Activity 的悬浮窗里也能长按选择范围并使用系统复制菜单。 */
+    private fun enableTextSelection(view: TextView) {
+        view.setTextIsSelectable(true)
+        view.isFocusableInTouchMode = true
+        view.movementMethod = ArrowKeyMovementMethod.getInstance()
     }
 
     /** 渲染降级链：完整版 → 无公式版 → 纯文本，任何一级失败都不能让答案消失 */

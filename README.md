@@ -344,11 +344,12 @@ H.264 不能从任意帧开始解码，所以导出会向前找到最近的一�
 **看历史在 App 里，和主功能平级**：首页顶部是两个 Tab —— **主功能 / 对话历史**，平级切换，悬浮窗里不承担历史浏览。
 
 - 「主功能」= 运行状态 + 全部录制/接口配置；
-- 「对话历史」= 每段一张卡片（时间 · 轮数 · 首个问题 · 最后回答摘要），右上角「清空」；
+- 「对话历史」= 每段一张卡片（AI 首答标题 · 时间 · 轮数 · 累计 token），支持单条删除或全部清空；
 - 点一段进 [HistoryDetailActivity](app/src/main/java/com/screenmemory/app/HistoryDetailActivity.kt) 看全文并可以**接着聊**。
 
 **历史对话可以接着聊**：[HistoryDetailActivity](app/src/main/java/com/screenmemory/app/HistoryDetailActivity.kt) 底部有输入框，
 新问题会带着这段对话的历史（最近 10 轮）发给模型，回答流式写入、完成后追加到同一段并落盘，回到列表能看到轮数变了。
+每轮 AI 回答会显示服务端返回的 token 用量；悬浮窗和历史详情的气泡文字都支持长按选择并复制。
 
 有两点是刻意的限制：
 

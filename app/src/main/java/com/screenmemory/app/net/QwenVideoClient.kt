@@ -80,7 +80,7 @@ class QwenVideoClient(private val prefs: Prefs) {
         onStatus: (String) -> Unit,
         onDelta: (String) -> Unit = {},
         history: List<ChatTurn> = emptyList()
-    ): String {
+    ): ModelAnswer {
         val key = prefs.qwenKey().trim()
         if (key.isEmpty()) throw IOException("请先填写百炼（DashScope）API Key")
         val useVideo = video != null && video.exists() && video.length() > 0L
@@ -274,23 +274,50 @@ class QwenVideoClient(private val prefs: Prefs) {
         systemPrompt: String,
         history: List<ChatTurn>,
         onDelta: (String) -> Unit
-    ): String {
+    ): ModelAnswer {
         val thinking = prefs.enableThinking()
-        if (thinking == null) {
-            return chatOnce(key, videoUrl, question, systemPrompt, history, onDelta, null)
-        }
         return try {
-            chatOnce(key, videoUrl, question, systemPrompt, history, onDelta, thinking)
+            chatOnce(
+                key, videoUrl, question, systemPrompt, history, onDelta,
+                thinking = thinking,
+                includeUsage = true
+            )
         } catch (t: Throwable) {
-            if (t.message?.contains("HTTP 400") == true) {
+            if (t.message?.contains("HTTP 400") != true) throw t
+            if (thinking != null) {
                 Log.w(
                     TIMING_TAG,
                     "模型不接受 enable_thinking，去掉参数重试：${t.message?.take(120)}"
                 )
-                chatOnce(key, videoUrl, question, systemPrompt, history, onDelta, null)
-            } else {
-                throw t
+                try {
+                    return chatOnce(
+                        key, videoUrl, question, systemPrompt, history, onDelta,
+                        thinking = null,
+                        includeUsage = true
+                    )
+                } catch (thinkingError: Throwable) {
+                    if (thinkingError.message?.contains("HTTP 400") != true) {
+                        throw thinkingError
+                    }
+                }
+                try {
+                    return chatOnce(
+                        key, videoUrl, question, systemPrompt, history, onDelta,
+                        thinking = thinking,
+                        includeUsage = false
+                    )
+                } catch (usageError: Throwable) {
+                    if (usageError.message?.contains("HTTP 400") != true) {
+                        throw usageError
+                    }
+                }
             }
+            Log.w(TIMING_TAG, "模型不接受 stream usage，关闭 usage 后重试")
+            chatOnce(
+                key, videoUrl, question, systemPrompt, history, onDelta,
+                thinking = null,
+                includeUsage = false
+            )
         }
     }
 
@@ -301,8 +328,9 @@ class QwenVideoClient(private val prefs: Prefs) {
         systemPrompt: String,
         history: List<ChatTurn>,
         onDelta: (String) -> Unit,
-        thinking: Boolean?
-    ): String {
+        thinking: Boolean?,
+        includeUsage: Boolean
+    ): ModelAnswer {
         val intro = if (videoUrl == null && history.isNotEmpty()) {
             question + "\n\n（这是追问，不再重复上传视频：画面和你上一轮看到的是同一段，请沿用上文里的画面信息）"
         } else {
@@ -336,6 +364,9 @@ class QwenVideoClient(private val prefs: Prefs) {
             .put("stream", true)
         if (thinking != null) {
             payload.put("enable_thinking", thinking)
+        }
+        if (includeUsage) {
+            payload.put("stream_options", JSONObject().put("include_usage", true))
         }
 
         val request = Request.Builder()

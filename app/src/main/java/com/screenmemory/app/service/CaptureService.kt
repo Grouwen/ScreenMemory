@@ -38,6 +38,7 @@ import com.screenmemory.app.chat.ChatStore
 import com.screenmemory.app.chat.ChatTurn
 import com.screenmemory.app.chat.Conversation
 import com.screenmemory.app.net.LlmClient
+import com.screenmemory.app.net.ModelAnswer
 import com.screenmemory.app.net.QwenVideoClient
 import com.screenmemory.app.overlay.OverlayController
 import com.screenmemory.app.speech.MathSpeech
@@ -561,7 +562,7 @@ class CaptureService : Service(), OverlayController.Listener {
                     }
                 }
 
-                val answer: String
+                val answer: ModelAnswer
                 val summary: String
                 if (videoMode) {
                     val hearsAudio = prefs.qwenModelHearsAudio()
@@ -630,7 +631,13 @@ class CaptureService : Service(), OverlayController.Listener {
 
                 // 这一轮入历史 + 落盘，面板重绘成完整对话
                 conv.turns.add(
-                    ChatTurn(question, answer.ifBlank { "模型没有返回内容" }, System.currentTimeMillis(), firstTurn)
+                    ChatTurn(
+                        question = question,
+                        answer = answer.text.ifBlank { "模型没有返回内容" },
+                        at = System.currentTimeMillis(),
+                        withMedia = firstTurn,
+                        usage = answer.usage
+                    )
                 )
                 overlay?.setTranscript(conv.turns.toList(), null, null)
                 overlay?.clearInput()
@@ -640,6 +647,7 @@ class CaptureService : Service(), OverlayController.Listener {
                 val builder = StringBuilder(summary)
                 // 渲染降级时把原因带出来，否则用户只看到一堆 $ 和 #
                 overlay?.lastRenderError?.let { builder.append("\n⚠️ 渲染降级：").append(it) }
+                answer.usage?.let { builder.append("\nToken：").append(it.detailLabel()) }
                 prepared?.savedPath?.let { builder.append("\n片段已保存：").append(it) }
                 overlay?.setStatus(builder.toString())
 

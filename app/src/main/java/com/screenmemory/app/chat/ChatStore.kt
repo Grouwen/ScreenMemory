@@ -5,6 +5,26 @@ import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.text.NumberFormat
+import java.util.Locale
+
+data class TokenUsage(
+    val promptTokens: Int = 0,
+    val completionTokens: Int = 0,
+    val totalTokens: Int = 0
+) {
+    val isKnown: Boolean
+        get() = totalTokens > 0
+
+    fun compactLabel(): String = "${format(totalTokens)} tokens"
+
+    fun detailLabel(): String =
+        "输入 ${format(promptTokens)} / 输出 ${format(completionTokens)} / " +
+            "合计 ${format(totalTokens)} tokens"
+
+    private fun format(value: Int): String =
+        NumberFormat.getIntegerInstance(Locale.getDefault()).format(value)
+}
 
 /** 一轮问答 */
 data class ChatTurn(
@@ -12,12 +32,17 @@ data class ChatTurn(
     val answer: String,
     val at: Long,
     /** 这一轮是否附了画面（抽帧图片 / 直传视频）。首轮带，追问不带 */
-    val withMedia: Boolean
+    val withMedia: Boolean,
+    /** 服务端返回的 token 用量；旧记录或服务端未返回时为 null */
+    val usage: TokenUsage? = null
 )
 
 /** 一段对话：一次「点球冻结画面」到面板关闭之间的所有问答 */
 class Conversation(val id: Long) {
     val turns = mutableListOf<ChatTurn>()
+
+    val totalTokens: Int
+        get() = turns.sumOf { it.usage?.totalTokens ?: 0 }
 }
 
 /**
@@ -56,12 +81,23 @@ class ChatStore(context: Context) {
                 val turns = obj.optJSONArray("turns") ?: JSONArray()
                 for (j in 0 until turns.length()) {
                     val t = turns.optJSONObject(j) ?: continue
+                    val promptTokens = t.optInt("prompt_tokens", 0)
+                    val completionTokens = t.optInt("completion_tokens", 0)
+                    val totalTokens = t.optInt(
+                        "total_tokens",
+                        promptTokens + completionTokens
+                    )
                     conv.turns.add(
                         ChatTurn(
                             question = t.optString("q"),
                             answer = t.optString("a"),
                             at = t.optLong("at", 0L),
-                            withMedia = t.optBoolean("media", false)
+                            withMedia = t.optBoolean("media", false),
+                            usage = if (totalTokens > 0) {
+                                TokenUsage(promptTokens, completionTokens, totalTokens)
+                            } else {
+                                null
+                            }
                         )
                     )
                 }
@@ -98,6 +134,19 @@ class ChatStore(context: Context) {
         }
     }
 
+    /** 删除单独一段对话；不存在时返回 false。 */
+    fun delete(id: Long): Boolean {
+        return try {
+            val all = loadAll().toMutableList()
+            if (!all.removeAll { it.id == id }) return false
+            writeAll(all)
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "删除历史失败", t)
+            false
+        }
+    }
+
     /** @return 段数 to 轮数 */
     fun stats(): Pair<Int, Int> {
         val all = loadAll()
@@ -109,13 +158,18 @@ class ChatStore(context: Context) {
         for (conv in list) {
             val turns = JSONArray()
             for (t in conv.turns) {
-                turns.put(
-                    JSONObject()
-                        .put("q", t.question)
-                        .put("a", t.answer)
-                        .put("at", t.at)
-                        .put("media", t.withMedia)
-                )
+                val turnJson = JSONObject()
+                    .put("q", t.question)
+                    .put("a", t.answer)
+                    .put("at", t.at)
+                    .put("media", t.withMedia)
+                t.usage?.let {
+                    turnJson
+                        .put("prompt_tokens", it.promptTokens)
+                        .put("completion_tokens", it.completionTokens)
+                        .put("total_tokens", it.totalTokens)
+                }
+                turns.put(turnJson)
             }
             array.put(JSONObject().put("id", conv.id).put("turns", turns))
         }
