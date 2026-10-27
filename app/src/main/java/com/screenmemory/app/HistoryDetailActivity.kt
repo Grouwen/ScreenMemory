@@ -254,7 +254,7 @@ class HistoryDetailActivity : AppCompatActivity() {
         val renderer = markwon
         if (renderer != null) {
             try {
-                renderer.setMarkdown(view, Latex.normalize(text))
+                renderer.setMarkdown(view, Latex.forRender(text))
                 return
             } catch (t: Throwable) {
                 Log.w(TAG, "render bubble failed", t)

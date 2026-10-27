@@ -52,4 +52,22 @@ class LatexTest {
     fun doesNotConvertChineseTextInsideDollarSigns() {
         assertEquals("\$甲\$", Latex.normalize("\$甲\$"))
     }
+
+    @Test
+    fun streamingKeepsCompleteMathAndDefersOpenMath() {
+        assertEquals(
+            "结果 \$\$x^2\$\$",
+            Latex.forStreaming("结果 \$x^2\$")
+        )
+        val partial = Latex.forStreaming("正在写 \$\$\\frac{1")
+        assertEquals(false, partial.contains("\$\$"))
+        assertEquals(true, partial.contains("\\frac{1"))
+    }
+
+    @Test
+    fun invalidClosedMathFallsBackToPlainText() {
+        val rendered = Latex.forRender("坏公式 \$\$\\frac{1}{\$\$")
+        assertEquals(false, rendered.contains("\$\$"))
+        assertEquals(true, rendered.contains("\\frac{1}{"))
+    }
 }

@@ -22,6 +22,14 @@ object Latex {
     private val inlineMath = Regex("(?<!\\$)\\$([^$\\n]+?)\\$(?!\\$)")
     private val cjk = Regex("[\\u4e00-\\u9fa5]")
     private val mathish = Regex("[\\\\^_{}=()+\\-*/<>|]")
+    private val displayMath = Regex("""\$\$([\s\S]+?)\$\$""")
+    private val incompleteCommand = Regex(
+        """\\(?:frac|sqrt|text|mathrm|mathbf|mathit|left|right|begin|end)$"""
+    )
+    private val leftCommand = Regex("""\\left(?![A-Za-z])""")
+    private val rightCommand = Regex("""\\right(?![A-Za-z])""")
+    private val beginCommand = Regex("""\\begin(?![A-Za-z])""")
+    private val endCommand = Regex("""\\end(?![A-Za-z])""")
     private val simpleVariableOrNumber = Regex(
         """(?:[A-Za-zα-ωΑ-Ω][A-Za-z0-9_']*|[-+]?(?:\d+(?:\.\d+)?|\.\d+))"""
     )
@@ -43,5 +51,59 @@ object Latex {
                 )
             if (looksLikeMath) "$$" + body + "$$" else match.value
         }
+    }
+
+    /** 最终渲染前使用：完整但无法解析的公式降级为普通文本，避免绘制阶段崩溃。 */
+    fun forRender(markdown: String): String = sanitizeMath(normalize(markdown), streaming = false)
+
+    /**
+     * 流式渲染使用：保留完整合法的公式；正在输出、尚未闭合的最后一个公式暂时按普通文本显示。
+     */
+    fun forStreaming(markdown: String): String = sanitizeMath(normalize(markdown), streaming = true)
+
+    private fun sanitizeMath(markdown: String, streaming: Boolean): String {
+        var text = displayMath.replace(markdown) { match ->
+            if (isStructurallyComplete(match.groupValues[1])) {
+                match.value
+            } else {
+                match.groupValues[1]
+            }
+        }
+        if (!streaming) return text
+
+        var delimiterCount = 0
+        var index = text.indexOf("$$")
+        while (index >= 0) {
+            delimiterCount++
+            index = text.indexOf("$$", index + 2)
+        }
+        if (delimiterCount % 2 == 1) {
+            val open = text.lastIndexOf("$$")
+            if (open >= 0) text = text.removeRange(open, open + 2)
+        }
+        return text
+    }
+
+    private fun isStructurallyComplete(body: String): Boolean {
+        val trimmed = body.trim()
+        if (trimmed.isEmpty() || trimmed.endsWith("\\") || incompleteCommand.containsMatchIn(trimmed)) {
+            return false
+        }
+        var depth = 0
+        var escaped = false
+        for (char in trimmed) {
+            when {
+                escaped -> escaped = false
+                char == '\\' -> escaped = true
+                char == '{' -> depth++
+                char == '}' -> {
+                    depth--
+                    if (depth < 0) return false
+                }
+            }
+        }
+        return depth == 0 &&
+            leftCommand.findAll(trimmed).count() == rightCommand.findAll(trimmed).count() &&
+            beginCommand.findAll(trimmed).count() == endCommand.findAll(trimmed).count()
     }
 }

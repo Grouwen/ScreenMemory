@@ -183,8 +183,10 @@ class OverlayController(
         panel?.let { view ->
             val lp = panelParams ?: return@let
             val panelWidth = (width - dp(24)).coerceAtLeast(dp(220))
-            if (panelWidth != lp.width || !view.isAttachedToWindow) {
+            val panelHeight = panelHeightPx()
+            if (panelWidth != lp.width || panelHeight != lp.height || !view.isAttachedToWindow) {
                 lp.width = panelWidth
+                lp.height = panelHeight
                 applyLayout(view, lp)
             }
         }
@@ -349,7 +351,7 @@ class OverlayController(
             }
             val lp = WindowManager.LayoutParams(
                 (metrics.widthPixels - dp(24)).coerceAtLeast(dp(220)),
-                WindowManager.LayoutParams.WRAP_CONTENT,
+                panelHeightPx(),
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
                 PixelFormat.TRANSLUCENT
@@ -565,11 +567,12 @@ class OverlayController(
         root.addView(warning)
 
         val answerBox = ScrollView(context).apply {
-            visibility = View.GONE
+            visibility = View.INVISIBLE
             setBackgroundColor(0x00000000)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(190)
+                0,
+                1f
             ).apply { bottomMargin = dp(8) }
             addView(
                 LinearLayout(context).apply {
@@ -722,7 +725,7 @@ class OverlayController(
                 pendingAnswerView = null
                 renderedTurns = emptyList()
                 renderedPendingQuestion = null
-                scroll.visibility = View.GONE
+                scroll.visibility = View.INVISIBLE
                 return@post
             }
             val structureChanged =
@@ -760,10 +763,14 @@ class OverlayController(
                 renderedTurns = snapshot
                 renderedPendingQuestion = pendingQuestion
             } else if (pendingQuestion != null) {
-                pendingAnswerView?.text = Preview.plain(
-                    pendingAnswer.orEmpty().ifBlank { "正在等待回答…" }
-                )
-                pendingAnswerView?.let { enableTextSelection(it) }
+                pendingAnswerView?.let { view ->
+                    if (pendingAnswer.isNullOrBlank()) {
+                        view.setText("正在等待回答…")
+                    } else {
+                        renderStreamingMarkdown(view, pendingAnswer)
+                    }
+                    enableTextSelection(view)
+                }
             }
             scroll.visibility = View.VISIBLE
             scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
@@ -815,10 +822,16 @@ class OverlayController(
                 setColor(if (isUser) 0xFF2F6BFF.toInt() else 0xFFF2F3F7.toInt())
             }
             setTextColor(if (isUser) Color.WHITE else 0xFF12131A.toInt())
-            if (isUser || streaming) {
+            if (isUser) {
                 setText(Preview.plain(
-                    if (streaming && message.isBlank()) "正在等待回答…" else message
+                    message
                 ))
+            } else if (streaming) {
+                if (message.isBlank()) {
+                    setText("正在等待回答…")
+                } else {
+                    renderStreamingMarkdown(this, message)
+                }
             } else {
                 renderMarkdown(this, message)
             }
@@ -926,7 +939,7 @@ class OverlayController(
         markwonFull?.let { renderer ->
             try {
                 // ext-latex 只认 $$...$$，先把模型写的 $...$ 归一化
-                renderer.setMarkdown(view, Latex.normalize(markdown))
+                renderer.setMarkdown(view, Latex.forRender(markdown))
                 return
             } catch (t: Throwable) {
                 Log.e(TAG, "latex render failed", t)
@@ -946,6 +959,27 @@ class OverlayController(
             view.text = markdown
         } catch (_: Throwable) {
         }
+    }
+
+    private fun renderStreamingMarkdown(view: TextView, markdown: String) {
+        val safe = Latex.forStreaming(markdown)
+        markwonFull?.let { renderer ->
+            try {
+                renderer.setMarkdown(view, safe)
+                return
+            } catch (t: Throwable) {
+                Log.w(TAG, "stream markdown render failed", t)
+            }
+        }
+        markwonBasic?.let { renderer ->
+            try {
+                renderer.setMarkdown(view, safe)
+                return
+            } catch (t: Throwable) {
+                Log.w(TAG, "stream basic markdown render failed", t)
+            }
+        }
+        view.text = Preview.plain(safe)
     }
 
     fun setBusy(busy: Boolean) {
@@ -974,4 +1008,9 @@ class OverlayController(
         value.toFloat(),
         metrics
     ).toInt()
+
+    private fun panelHeightPx(): Int {
+        val available = (metrics.heightPixels - dp(48)).coerceAtLeast(dp(240))
+        return minOf(dp(500), available)
+    }
 }
