@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">数学网课助手</string>
-    <string name="app_subtitle">看网课卡住时点悬浮球 · 自动带上最近 30 秒板书问 AI · 公式用 LaTeX 讲清每一步</string>
+    <string name="app_subtitle">不积跬步无以至千里</string>
 
     <string name="section_status">运行状态</string>
     <string name="section_api">语音转写 · 按住说话</string>

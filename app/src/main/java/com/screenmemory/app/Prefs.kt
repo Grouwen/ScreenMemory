@@ -120,7 +120,7 @@ class Prefs(context: Context) {
 
     /** 千问视频模型，上传文件时会和它绑定，必须与推理时一致 */
     var qwenVideoModel: String
-        get() = sp.getString("qwen_video_model", "qwen-vl-max") ?: ""
+        get() = sp.getString("qwen_video_model", "qwen3.8-omni-flash") ?: ""
         set(value) = sp.edit().putString("qwen_video_model", value).apply()
 
     /** 优先使用系统离线识别（机型不支持或没结果时自动回退云端） */
@@ -157,7 +157,7 @@ class Prefs(context: Context) {
     fun qwenUploadEndpoint(): String = qwenUploadUrl.trim()
 
     /** 视频模型：上传凭证要用它，推理也必须用它 */
-    fun qwenModel(): String = qwenVideoModel.ifBlank { "qwen-vl-max" }
+    fun qwenModel(): String = qwenVideoModel.ifBlank { "qwen3.8-omni-flash" }
 
     /**
      * 视频直传时服务端按这个频率把片段拆成图片喂给视觉编码器。

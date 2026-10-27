@@ -149,7 +149,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="画面怎么发给模型"
+                        android:text="视频理解 模式选择"
                         android:textSize="13sp"
                         android:textStyle="bold" />
 
@@ -406,7 +406,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
-                    android:hint="视频模型（qwen-vl-max / qwen3.5-omni-plus）"
+                    android:hint="模型名"
                     app:helperText="上传文件时会和你填的模型绑定，之后必须用同一个模型调用，否则报错">
 
                     <com.google.android.material.textfield.TextInputEditText

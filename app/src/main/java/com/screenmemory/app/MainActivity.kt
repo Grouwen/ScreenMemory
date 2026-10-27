@@ -259,7 +259,7 @@ class MainActivity : AppCompatActivity() {
 
     /** 让用户看到「能听声音」当前到底是自动判定的结果，还是手动指定 */
     private fun updateAudioHint() {
-        val model = etVideoModel.text?.toString()?.trim().orEmpty().ifBlank { "qwen-vl-max" }
+        val model = etVideoModel.text?.toString()?.trim().orEmpty().ifBlank { "qwen3.8-omni-flash" }
         val autoHears = model.contains("omni", ignoreCase = true)
         tvAudioModeHint.text = when {
             rbAudioOn.isChecked -> "当前：能听声音（手动指定）"
@@ -338,8 +338,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun showModeInfoDialog() {
         AlertDialog.Builder(this)
-            .setTitle("CHARCHAR")
-            .setMessage("CHARCHAR")
+            .setTitle("关于模式选择")
+            .setMessage("抽帧图片：将视频按一定帧数挑出画面，保存成图片，发给ai。这个模式目前不会识别语音，即ai听不到声音。\n视频直传（推荐使用这个模式）：直接将视频发给ai，此功能可以识别语音，但是目前只支持千问的ai，推荐模型号：qwen3.8-omni-flash（便宜好用，极力推荐）")
             .setPositiveButton("知道了", null)
             .show()
     }
