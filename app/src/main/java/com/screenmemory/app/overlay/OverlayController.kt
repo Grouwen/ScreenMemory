@@ -720,6 +720,10 @@ class OverlayController(
             val messages = messageList ?: return@post
             val scroll = answerScroll ?: return@post
             val snapshot = turns.toList()
+            val previousScrollY = scroll.scrollY
+            val wasAtBottom = isScrolledToBottom(scroll)
+            val wasEmpty = renderedTurns.isEmpty() && renderedPendingQuestion == null
+            val pendingAdded = pendingQuestion != null && pendingQuestion != renderedPendingQuestion
             if (snapshot.isEmpty() && pendingQuestion == null) {
                 messages.removeAllViews()
                 pendingAnswerView = null
@@ -773,8 +777,18 @@ class OverlayController(
                 }
             }
             scroll.visibility = View.VISIBLE
-            scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+            if (wasAtBottom || wasEmpty || pendingAdded) {
+                scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+            } else {
+                scroll.post { scroll.scrollTo(0, previousScrollY) }
+            }
         }
+    }
+
+    private fun isScrolledToBottom(scroll: ScrollView): Boolean {
+        val child = scroll.getChildAt(0) ?: return true
+        val maxScroll = (child.measuredHeight - scroll.height).coerceAtLeast(0)
+        return scroll.scrollY >= maxScroll - dp(24)
     }
 
     private fun addMessage(
