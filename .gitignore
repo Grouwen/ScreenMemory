@@ -18,4 +18,5 @@ keystore.properties
 
 # Local release artifacts
 /release/
+/dist/
 /_signing_helper/
