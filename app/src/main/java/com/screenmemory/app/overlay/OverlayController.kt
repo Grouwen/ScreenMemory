@@ -362,6 +362,7 @@ class OverlayController(
                 wm.addView(view, lp)
                 panel = view
                 panelParams = lp
+                bubble?.visibility = View.GONE
             } catch (t: Throwable) {
                 Log.e(TAG, "add panel view failed", t)
                 // 同上：panel 仍是 null，onPanelClosed() 再也不会被调用，必须在这里解冻
@@ -391,6 +392,7 @@ class OverlayController(
             }
             panel = null
             panelParams = null
+            bubble?.visibility = View.VISIBLE
             listener.onPanelClosed()
             clearViewRefs()
         }
@@ -412,6 +414,7 @@ class OverlayController(
             }
             bubble?.text = "聊"
             bubble?.contentDescription = "重新显示聊天"
+            bubble?.visibility = View.VISIBLE
             try {
                 Toast.makeText(context, "聊天已收起，点「聊」切回来", Toast.LENGTH_SHORT).show()
             } catch (_: Throwable) {
@@ -434,6 +437,7 @@ class OverlayController(
             }
             bubble?.text = "问"
             bubble?.contentDescription = null
+            bubble?.visibility = View.GONE
             view.requestLayout()
         }
     }
