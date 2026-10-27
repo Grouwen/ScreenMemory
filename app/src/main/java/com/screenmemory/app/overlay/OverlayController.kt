@@ -519,11 +519,11 @@ class OverlayController(
         )
         header.addView(
             TextView(context).apply {
-                text = "看视频"
+                text = "隐藏"
                 setTextColor(0xFF2F6BFF.toInt())
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
                 setPadding(dp(8), dp(4), dp(8), dp(6))
-                contentDescription = "收起聊天，查看视频"
+                contentDescription = "收起聊天，不中断聊天"
                 setOnClickListener { hideChatForVideo() }
             }
         )

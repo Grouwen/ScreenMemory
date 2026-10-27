@@ -45,9 +45,9 @@ class ScreenRingRecorder(
     companion object {
         private const val TAG = "ScreenRing"
         private const val TIMING_TAG = "Timing"
-        private const val MAX_BUFFER_BYTES = 160L * 1024 * 1024
+        private const val MAX_BUFFER_BYTES = 256L * 1024 * 1024
         const val MIN_WINDOW_SECONDS = 5
-        const val MAX_WINDOW_SECONDS = 60
+        const val MAX_WINDOW_SECONDS = 180
     }
 
     /** 环形缓冲窗口，可在录制过程中动态调整 */

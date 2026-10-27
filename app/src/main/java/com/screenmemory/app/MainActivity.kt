@@ -618,7 +618,7 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val CLIP_MIN = 5
-        const val CLIP_MAX = 60
+        const val CLIP_MAX = 180
         const val FRAME_MIN = 1
         const val FRAME_MAX = 20
     }

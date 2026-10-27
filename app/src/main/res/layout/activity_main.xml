@@ -682,7 +682,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="保留最近多少秒（5–60）"
+                        android:text="保留最近多少秒（5–180）"
                         android:textSize="14sp" />
 
                     <com.google.android.material.textfield.TextInputLayout
@@ -696,7 +696,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:inputType="number"
-                            android:maxLength="2"
+                            android:maxLength="3"
                             android:maxLines="1"
                             android:text="30"
                             android:textSize="14sp" />
@@ -710,12 +710,12 @@
                     android:stepSize="1"
                     android:value="30"
                     android:valueFrom="5"
-                    android:valueTo="60" />
+                    android:valueTo="180" />
 
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="环形缓冲的窗口长度：内存里始终保留最近这么多秒的编码数据，点「发送」时从中截取。越长越能覆盖刚才发生的事，内存占用也按比例增长（60 秒、1080p/6Mbps 约 45MB）。"
+                    android:text="环形缓冲的窗口长度：内存里始终保留最近这么多秒的编码数据，点「发送」时从中截取。越长越能覆盖刚才发生的事，内存占用也按比例增长（标准档 180 秒约 135MB；内存硬上限 256MB，清晰档长时间录制可能提前丢弃最旧帧）。"
                     android:textSize="11sp" />
 
                 <TextView

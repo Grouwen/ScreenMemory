@@ -74,8 +74,8 @@ class Prefs(context: Context) {
 
     /** 环形缓冲保留时长（秒），用户可自定义 */
     var clipSeconds: Int
-        get() = sp.getInt("clip_seconds", 30).coerceIn(5, 60)
-        set(value) = sp.edit().putInt("clip_seconds", value.coerceIn(5, 60)).apply()
+        get() = sp.getInt("clip_seconds", 30).coerceIn(5, 180)
+        set(value) = sp.edit().putInt("clip_seconds", value.coerceIn(5, 180)).apply()
 
     /** 每次发送给模型的关键帧数量，用户可自定义 */
     var frameCount: Int
