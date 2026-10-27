@@ -724,16 +724,31 @@ class OverlayController(
             if (structureChanged) {
                 messages.removeAllViews()
                 pendingAnswerView = null
-                for (turn in snapshot) {
-                    addMessage(turn.question, isUser = true)
-                    addMessage(turn.answer, isUser = false, usage = turn.usage)
+                snapshot.forEachIndexed { index, turn ->
+                    addMessage(
+                        turn.question,
+                        isUser = true,
+                        turnNumber = index + 1
+                    )
+                    addMessage(
+                        turn.answer,
+                        isUser = false,
+                        turnNumber = index + 1,
+                        usage = turn.usage
+                    )
                 }
                 if (pendingQuestion != null) {
-                    addMessage(pendingQuestion, isUser = true)
+                    val pendingTurn = snapshot.size + 1
+                    addMessage(
+                        pendingQuestion,
+                        isUser = true,
+                        turnNumber = pendingTurn
+                    )
                     pendingAnswerView = addMessage(
                         pendingAnswer.orEmpty(),
                         isUser = false,
-                        streaming = true
+                        streaming = true,
+                        turnNumber = pendingTurn
                     )
                 }
                 renderedTurns = snapshot
@@ -753,7 +768,8 @@ class OverlayController(
         message: String,
         isUser: Boolean,
         streaming: Boolean = false,
-        usage: TokenUsage? = null
+        usage: TokenUsage? = null,
+        turnNumber: Int? = null
     ): TextView {
         val messages = messageList ?: error("message list not initialized")
         val row = LinearLayout(context).apply {
@@ -771,8 +787,8 @@ class OverlayController(
         val role = TextView(context).apply {
             text = buildString {
                 append(if (isUser) "你" else "AI 助手")
-                if (!isUser && usage?.isKnown == true) {
-                    append(" · ").append(usage.compactLabel())
+                if (turnNumber != null) {
+                    append(" · 第 ").append(turnNumber).append(" 轮")
                 }
             }
             setTextColor(0xFF8A8F9C.toInt())
@@ -816,6 +832,20 @@ class OverlayController(
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
         )
+        if (!isUser && usage?.isKnown == true) {
+            column.addView(
+                TextView(context).apply {
+                    text = "本轮 · " + usage.detailLabel()
+                    setTextColor(0xFF8A8F9C.toInt())
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+                    setPadding(dp(4), dp(3), dp(4), 0)
+                },
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
         row.addView(
             column,
             LinearLayout.LayoutParams(

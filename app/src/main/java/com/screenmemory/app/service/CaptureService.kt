@@ -647,7 +647,7 @@ class CaptureService : Service(), OverlayController.Listener {
                 val builder = StringBuilder(summary)
                 // 渲染降级时把原因带出来，否则用户只看到一堆 $ 和 #
                 overlay?.lastRenderError?.let { builder.append("\n⚠️ 渲染降级：").append(it) }
-                answer.usage?.let { builder.append("\nToken：").append(it.detailLabel()) }
+                answer.usage?.let { builder.append("\n本轮 Token：").append(it.detailLabel()) }
                 prepared?.savedPath?.let { builder.append("\n片段已保存：").append(it) }
                 overlay?.setStatus(builder.toString())
 
