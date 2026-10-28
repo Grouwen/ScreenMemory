@@ -2,6 +2,7 @@ package com.screenmemory.app
 
 import android.os.Bundle
 import android.os.SystemClock
+import android.graphics.Bitmap
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
@@ -9,9 +10,12 @@ import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.screenmemory.app.chat.ChatStore
@@ -23,6 +27,7 @@ import com.screenmemory.app.net.QwenVideoClient
 import com.screenmemory.app.ui.MathSymbolBar
 import com.screenmemory.app.util.Latex
 import com.screenmemory.app.util.Preview
+import com.screenmemory.app.util.ImagePayload
 import io.noties.markwon.Markwon
 import io.noties.markwon.ext.latex.JLatexMathPlugin
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
@@ -65,6 +70,15 @@ class HistoryDetailActivity : AppCompatActivity() {
             解释要给依据（定义 / 定理 / 变形）；公式一律用 LaTeX（行内 $...$ 或独立成行 $$...$$）。
             用简体中文，控制在 250 字以内。排版用 Markdown，不要输出 HTML 标签，不要用 +---+ 这种 ASCII 线框画表格。
         """.trimIndent()
+
+        private val IMAGE_FOLLOW_UP_PROMPT = """
+            你是一位数学网课助教。学生在回看一段提问记录，并上传了一张图片继续追问。
+
+            请优先依据这张图片回答；如果图片里的内容不足以回答，再结合上文已有问答。
+            图片不清晰或关键步骤被截掉时，直接说明需要重新上传更完整的截图，不要凭空猜测。
+            解释要给依据（定义 / 定理 / 变形）；公式一律用 LaTeX（行内 $...$ 或独立成行 $$...$$）。
+            用简体中文，控制在 250 字以内。排版用 Markdown，不要输出 HTML 标签。
+        """.trimIndent()
     }
 
     private lateinit var messageList: LinearLayout
@@ -72,6 +86,25 @@ class HistoryDetailActivity : AppCompatActivity() {
     private lateinit var input: EditText
     private lateinit var send: Button
     private lateinit var followStatus: TextView
+    private lateinit var imageRow: LinearLayout
+    private lateinit var imagePreview: ImageView
+
+    private var pendingImageBase64: String? = null
+    private var pendingImageBitmap: Bitmap? = null
+
+    private val imagePicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri == null) return@registerForActivityResult
+        val payload = ImagePayload.fromUri(this, uri)
+        if (payload == null) {
+            Toast.makeText(this, "图片读取失败，请换一张试试", Toast.LENGTH_SHORT).show()
+            return@registerForActivityResult
+        }
+        clearImageAttachment()
+        pendingImageBitmap = payload.bitmap
+        pendingImageBase64 = payload.base64
+        imagePreview.setImageBitmap(payload.bitmap)
+        imageRow.visibility = View.VISIBLE
+    }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val prefs by lazy { Prefs(this) }
@@ -113,6 +146,14 @@ class HistoryDetailActivity : AppCompatActivity() {
         input = findViewById(R.id.etFollowInput)
         send = findViewById(R.id.btnFollowSend)
         followStatus = findViewById(R.id.tvFollowStatus)
+        imageRow = findViewById(R.id.imageAttachRow)
+        imagePreview = findViewById(R.id.imageAttachPreview)
+        findViewById<TextView>(R.id.tvImageAttachRemove).setOnClickListener {
+            clearImageAttachment()
+        }
+        findViewById<Button>(R.id.btnFollowImage).setOnClickListener {
+            imagePicker.launch("image/*")
+        }
         findViewById<TextView>(R.id.tvBack).setOnClickListener { finish() }
         findViewById<LinearLayout>(R.id.mathKeyboardHost).addView(
             MathSymbolBar(this) { input }
@@ -138,12 +179,13 @@ class HistoryDetailActivity : AppCompatActivity() {
             if (conv.totalTokens > 0) {
                 append(" · 累计 ${TokenUsage(totalTokens = conv.totalTokens).compactLabel()}")
             }
-            append("（不再附图，只依据上面的对话）")
+            append("（也可以上传图片一起问）")
         }
     }
 
     override fun onDestroy() {
         scope.cancel()
+        clearImageAttachment()
         super.onDestroy()
     }
 
@@ -156,7 +198,7 @@ class HistoryDetailActivity : AppCompatActivity() {
             addMessage("这段对话还没有内容。", isUser = false)
         } else {
             for (turn in conv.turns) {
-                addMessage(turn.question, isUser = true)
+                addMessage(turn.question, isUser = true, hasImage = turn.hasImage)
                 addMessage(turn.answer, isUser = false, usage = turn.usage)
             }
         }
@@ -167,6 +209,7 @@ class HistoryDetailActivity : AppCompatActivity() {
         message: String,
         isUser: Boolean,
         streaming: Boolean = false,
+        hasImage: Boolean = false,
         usage: TokenUsage? = null
     ): TextView {
         val row = LinearLayout(this).apply {
@@ -186,6 +229,7 @@ class HistoryDetailActivity : AppCompatActivity() {
         val role = TextView(this).apply {
             text = buildString {
                 append(if (isUser) "你" else "AI 助手")
+                if (hasImage) append(" · 图片")
                 if (!isUser && usage?.isKnown == true) {
                     append(" · ").append(usage.compactLabel())
                 }
@@ -305,10 +349,21 @@ class HistoryDetailActivity : AppCompatActivity() {
         }
     }
 
+    private fun clearImageAttachment() {
+        pendingImageBase64 = null
+        imagePreview.setImageDrawable(null)
+        imageRow.visibility = View.GONE
+        pendingImageBitmap?.recycle()
+        pendingImageBitmap = null
+    }
+
     // ------------------------------------------------------------------ 继续追问
 
     private fun sendFollowUp() {
-        val question = input.text?.toString()?.trim().orEmpty()
+        val hasImage = pendingImageBase64 != null
+        val question = input.text?.toString()?.trim().orEmpty().ifEmpty {
+            if (hasImage) "请解释这张图片里的重点内容" else ""
+        }
         if (question.isEmpty()) {
             followStatus.text = "先写点什么再发送"
             return
@@ -317,9 +372,13 @@ class HistoryDetailActivity : AppCompatActivity() {
         sending = true
         send.isEnabled = false
         input.isEnabled = false
-        followStatus.text = "追问中（只依据上面的对话，不再附图）…"
+        followStatus.text = if (hasImage) {
+            "追问中（正在让模型看图片）…"
+        } else {
+            "追问中（只依据上面的对话）…"
+        }
         hideKeyboard()
-        addMessage(question, isUser = true)
+        addMessage(question, isUser = true, hasImage = hasImage)
         pendingAnswerView = addMessage("", isUser = false, streaming = true)
         scrollDown()
 
@@ -339,22 +398,32 @@ class HistoryDetailActivity : AppCompatActivity() {
 
         scope.launch {
             try {
+                val image = pendingImageBase64
                 val answer = withContext(Dispatchers.IO) {
                     if (prefs.videoMode) {
-                        // 视频模式也用它自己的端点，只是不带视频（video = null → 纯文字追问）
+                        // 视频模式也用它自己的端点；这一轮只带用户新附的图片，不重传视频
                         QwenVideoClient(prefs).ask(
                             question = question,
                             video = null,
-                            systemPrompt = FOLLOW_UP_PROMPT,
+                            systemPrompt = if (hasImage) {
+                                IMAGE_FOLLOW_UP_PROMPT
+                            } else {
+                                FOLLOW_UP_PROMPT
+                            },
                             onStatus = { status -> runOnUiThread { followStatus.text = status } },
                             onDelta = onDelta,
-                            history = history
+                            history = history,
+                            imageBase64 = image
                         )
                     } else {
                         LlmClient(prefs).ask(
                             question = question,
-                            jpegBase64 = emptyList(),
-                            systemPrompt = FOLLOW_UP_PROMPT,
+                            jpegBase64 = listOfNotNull(image),
+                            systemPrompt = if (hasImage) {
+                                IMAGE_FOLLOW_UP_PROMPT
+                            } else {
+                                FOLLOW_UP_PROMPT
+                            },
                             onDelta = onDelta,
                             history = history
                         )
@@ -366,13 +435,15 @@ class HistoryDetailActivity : AppCompatActivity() {
                         question = question,
                         answer = answer.text.ifBlank { "模型没有返回内容" },
                         at = System.currentTimeMillis(),
-                        withMedia = false,
+                        withMedia = hasImage,
+                        hasImage = hasImage,
                         usage = answer.usage
                     )
                 )
                 withContext(Dispatchers.IO) { ChatStore(this@HistoryDetailActivity).save(conv) }
 
                 input.setText("")
+                clearImageAttachment()
                 renderConversation()
                 followStatus.text = buildString {
                     append("已追问 · 现在是第 ${conv.turns.size} 轮")

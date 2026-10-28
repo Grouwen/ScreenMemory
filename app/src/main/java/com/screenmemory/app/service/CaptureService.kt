@@ -10,6 +10,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.graphics.Rect
 import android.hardware.display.DisplayManager
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
@@ -26,6 +28,7 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.screenmemory.app.MainActivity
+import com.screenmemory.app.ImagePickerActivity
 import com.screenmemory.app.Prefs
 import com.screenmemory.app.QualityProfile
 import com.screenmemory.app.R
@@ -62,8 +65,10 @@ class CaptureService : Service(), OverlayController.Listener {
         const val ACTION_START = "com.screenmemory.app.action.START"
         const val ACTION_STOP = "com.screenmemory.app.action.STOP"
         const val ACTION_UPDATE = "com.screenmemory.app.action.UPDATE"
+        const val ACTION_IMAGE_PICKED = "com.screenmemory.app.action.IMAGE_PICKED"
         const val EXTRA_RESULT_CODE = "extra_result_code"
         const val EXTRA_RESULT_DATA = "extra_result_data"
+        const val EXTRA_IMAGE_BASE64 = "extra_image_base64"
         private const val CHANNEL_ID = "screen_memory"
         private const val NOTIF_ID = 1001
 
@@ -196,6 +201,13 @@ class CaptureService : Service(), OverlayController.Listener {
             ACTION_STOP -> stopEverything(true)
 
             ACTION_UPDATE -> applySettings()
+
+            ACTION_IMAGE_PICKED -> {
+                val base64 = intent.getStringExtra(EXTRA_IMAGE_BASE64)
+                if (ready && !base64.isNullOrBlank()) {
+                    overlay?.setAttachmentBase64(base64)
+                }
+            }
 
             else -> if (!ready) {
                 stopSelf()
@@ -437,6 +449,18 @@ class CaptureService : Service(), OverlayController.Listener {
         overlay?.setStatus("正在听… 说完松手")
     }
 
+    override fun pickImage() {
+        try {
+            startActivity(
+                Intent(this, ImagePickerActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (t: Throwable) {
+            Log.e(TAG, "open image picker failed", t)
+            toast("打不开相册：${t.message}")
+        }
+    }
+
     override fun onHoldEnd() {
         if (usingLocalSpeech) {
             val engine = speech
@@ -506,8 +530,11 @@ class CaptureService : Service(), OverlayController.Listener {
             prefs.asrKey().isNotBlank() &&
             prefs.asrEndpoint().isNotBlank()
 
-    override fun onSend(text: String) {
-        val question = text.trim()
+    override fun onSend(text: String, imageBase64: String?) {
+        val hasImage = !imageBase64.isNullOrBlank()
+        val question = text.trim().ifEmpty {
+            if (hasImage) "请解释这张截图里的重点内容" else ""
+        }
         if (question.isEmpty()) {
             overlay?.setStatus("先说点什么，或直接输入文字")
             return
@@ -535,7 +562,7 @@ class CaptureService : Service(), OverlayController.Listener {
                 overlay?.setWarning("")
 
                 // 追问不再打包画面：模型沿用上一轮看到的那批帧，省一次编码+抽帧+上传
-                val prepared: Prepared? = if (firstTurn) {
+                val prepared: Prepared? = if (firstTurn && !hasImage) {
                     overlay?.setStatus(
                         if (rec.isFrozen()) "正在打包「点按钮那一刻」之前的 ${prefs.clipSeconds} 秒…"
                         else "正在打包最近 ${prefs.clipSeconds} 秒…"
@@ -547,6 +574,9 @@ class CaptureService : Service(), OverlayController.Listener {
                     null
                 }
                 val preparedAt = SystemClock.elapsedRealtime()
+                if (hasImage && prepared == null) {
+                    overlay?.setStatus("已附图，正在让模型看截图…")
+                }
 
                 // 流式输出：先纯文本预览，收尾再整体渲染 Markdown（半截公式不能交给 LaTeX 渲染器）
                 val streamed = StringBuilder()
@@ -577,50 +607,76 @@ class CaptureService : Service(), OverlayController.Listener {
                         )
                     }
                     overlay?.setWarning(warnings.joinToString("\n\n"))
-                    if (prepared == null) overlay?.setStatus("追问中（沿用上一轮的画面）…")
+                    if (hasImage) {
+                        overlay?.setStatus("已附图，正在让模型看截图…")
+                    } else if (prepared == null) {
+                        overlay?.setStatus("追问中（沿用上一轮的画面）…")
+                    }
                     answer = withContext(Dispatchers.IO) {
                         videoClient.ask(
                             question = question,
                             video = prepared?.file,
-                            systemPrompt = if (prepared == null) {
-                                videoFollowUpPrompt()
-                            } else {
-                                videoPrompt(prepared.hasAudio, hearsAudio)
+                            systemPrompt = when {
+                                hasImage -> imageSystemPrompt()
+                                prepared == null -> videoFollowUpPrompt()
+                                else -> videoPrompt(prepared.hasAudio, hearsAudio)
                             },
                             onStatus = { status -> overlay?.setStatus(status) },
                             onDelta = onDelta,
-                            history = history
+                            history = history,
+                            imageBase64 = imageBase64
                         )
                     }
-                    summary = if (prepared == null) {
-                        "已追问 · 第 ${history.size + 1} 轮（画面沿用上一轮）"
-                    } else buildString {
-                        append("已发送 · 视频直传 / ${prepared.durationMs / 1000} 秒 · ")
-                        when {
-                            !prepared.hasAudio -> append("没采到声音")
-                            hearsAudio -> append("含音轨，模型会参考声音")
-                            else -> append("含音轨，但 ${prefs.qwenModel()} 只解析画面")
+                    summary = when {
+                        hasImage && prepared == null ->
+                            "已发送 · 附带 1 张截图 · 第 ${history.size + 1} 轮"
+                        hasImage -> "已发送 · 视频 + 1 张截图"
+                        prepared == null ->
+                            "已追问 · 第 ${history.size + 1} 轮（画面沿用上一轮）"
+                        else -> buildString {
+                            append("已发送 · 视频直传 / ${prepared.durationMs / 1000} 秒 · ")
+                            when {
+                                !prepared.hasAudio -> append("没采到声音")
+                                hearsAudio -> append("含音轨，模型会参考声音")
+                                else -> append("含音轨，但 ${prefs.qwenModel()} 只解析画面")
+                            }
                         }
                     }
                 } else {
-                    if (prepared == null) {
+                    if (hasImage) {
+                        overlay?.setStatus("已附图，正在让模型看截图…")
+                    } else if (prepared == null) {
                         overlay?.setStatus("追问中（沿用上一轮的画面）…")
                     } else {
                         overlay?.setStatus("已发送 ${prepared.frames.size} 帧画面，等模型回答…")
                     }
+                    val images = buildList {
+                        if (hasImage) add(imageBase64!!)
+                        addAll(prepared?.frames.orEmpty())
+                    }
                     answer = withContext(Dispatchers.IO) {
                         llm.ask(
                             question = question,
-                            jpegBase64 = prepared?.frames ?: emptyList(),
-                            systemPrompt = if (prepared == null) followUpSystemPrompt() else systemPrompt(),
+                            jpegBase64 = images,
+                            systemPrompt = if (hasImage) {
+                                imageSystemPrompt()
+                            } else if (prepared == null) {
+                                followUpSystemPrompt()
+                            } else {
+                                systemPrompt()
+                            },
                             onDelta = onDelta,
                             history = history
                         )
                     }
-                    summary = if (prepared == null) {
-                        "已追问 · 第 ${history.size + 1} 轮（画面沿用上一轮）"
-                    } else {
-                        buildString {
+                    summary = when {
+                        hasImage && prepared == null ->
+                            "已发送 · 附带 1 张截图 · 第 ${history.size + 1} 轮"
+                        hasImage && prepared != null ->
+                            "已发送 · 截图 + ${prepared.frames.size} 帧画面"
+                        prepared == null ->
+                            "已追问 · 第 ${history.size + 1} 轮（画面沿用上一轮）"
+                        else -> buildString {
                             append("已发送 · ${prepared.frames.size} 帧 / ${prepared.durationMs / 1000} 秒")
                             if (prepared.clipCount > 1) {
                                 append(" · 已合并 ${prepared.clipCount} 段旋转画面")
@@ -635,12 +691,14 @@ class CaptureService : Service(), OverlayController.Listener {
                         question = question,
                         answer = answer.text.ifBlank { "模型没有返回内容" },
                         at = System.currentTimeMillis(),
-                        withMedia = firstTurn,
+                        withMedia = firstTurn || hasImage,
+                        hasImage = hasImage,
                         usage = answer.usage
                     )
                 )
                 overlay?.setTranscript(conv.turns.toList(), null, null)
                 overlay?.clearInput()
+                overlay?.clearAttachment()
 
                 logTiming(startedAt, preparedAt, firstTokenAt, prepared, history.size, firstTurn)
 
@@ -661,6 +719,33 @@ class CaptureService : Service(), OverlayController.Listener {
                 asking = false
                 overlay?.setBusy(false)
             }
+        }
+    }
+
+    override fun captureRegion(rect: Rect, onResult: (Bitmap?) -> Unit) {
+        val rec = recorder
+        if (!ready || rec == null) {
+            onResult(null)
+            return
+        }
+        val metrics = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        (getSystemService(WINDOW_SERVICE) as WindowManager).defaultDisplay.getRealMetrics(metrics)
+        scope.launch {
+            val bitmap = withContext(Dispatchers.IO) {
+                try {
+                    rec.captureRegion(
+                        rect,
+                        metrics.widthPixels,
+                        metrics.heightPixels,
+                        metrics.densityDpi
+                    )
+                } catch (t: Throwable) {
+                    Log.e(TAG, "region screenshot failed", t)
+                    null
+                }
+            }
+            onResult(bitmap)
         }
     }
 
@@ -959,6 +1044,15 @@ class CaptureService : Service(), OverlayController.Listener {
         你是一位坐在学生旁边的数学网课助教。学生正在看一节数学网课（屏幕上通常是老师的板书、公式推导、PPT 或例题），卡住了就会截取最近 ${prefs.clipSeconds} 秒的画面来问你。
 
         下面附带的就是这 ${prefs.clipSeconds} 秒的屏幕截图，按时间先后排列，最后一张最接近提问的那一刻。你能从连续几帧里看出老师正在写什么、讲到哪一行。
+
+        $mathRules
+    """.trimIndent()
+
+    /** 用户自己上传 / 框选的单张图片 */
+    private fun imageSystemPrompt(): String = """
+        你是一位数学网课助教。学生上传了一张图片（可能是题目、板书、公式推导或屏幕截图），并据此提问。
+
+        请优先依据这张图片回答；如果图片里的信息不足，再结合上文。图片不清晰或关键步骤被截掉时，直接说明需要重新上传更完整的图片，不要凭空猜测。
 
         $mathRules
     """.trimIndent()

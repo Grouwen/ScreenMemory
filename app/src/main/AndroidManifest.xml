@@ -41,6 +41,13 @@
             android:label="对话详情"
             android:theme="@style/Theme.ScreenMemory" />
 
+        <activity
+            android:name=".ImagePickerActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@style/Theme.ScreenMemory.Transparent" />
+
         <service
             android:name=".service.CaptureService"
             android:exported="false"

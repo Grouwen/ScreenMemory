@@ -76,9 +76,52 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:paddingBottom="6dp"
-            android:text="可以接着问（不再附图，只依据上面的对话回答）"
+            android:text="可以接着问，也可以上传图片"
             android:textColor="?android:attr/textColorSecondary"
             android:textSize="11sp" />
+
+        <LinearLayout
+            android:id="@+id/imageAttachRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingBottom="6dp"
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/imageAttachPreview"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:background="?attr/colorSurfaceVariant"
+                android:contentDescription="已附图片"
+                android:scaleType="centerCrop" />
+
+            <TextView
+                android:id="@+id/tvImageAttachLabel"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:paddingStart="10dp"
+                android:paddingEnd="6dp"
+                android:text="图片已附上，发送时会一起交给模型"
+                android:textColor="?android:attr/textColorSecondary"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/tvImageAttachRemove"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="移除图片"
+                android:paddingStart="8dp"
+                android:paddingTop="4dp"
+                android:paddingEnd="4dp"
+                android:paddingBottom="4dp"
+                android:text="×"
+                android:textColor="?android:attr/textColorSecondary"
+                android:textSize="18sp" />
+        </LinearLayout>
 
         <LinearLayout
             android:id="@+id/mathKeyboardHost"
@@ -108,6 +151,17 @@
                 android:paddingBottom="10dp"
                 android:textColor="?android:attr/textColorPrimary"
                 android:textSize="14sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnFollowImage"
+                android:layout_width="wrap_content"
+                android:layout_height="46dp"
+                android:layout_marginStart="8dp"
+                android:minWidth="0dp"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:text="图片"
+                app:cornerRadius="12dp" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnFollowSend"

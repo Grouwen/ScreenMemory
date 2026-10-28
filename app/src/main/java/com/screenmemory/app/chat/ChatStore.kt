@@ -33,6 +33,8 @@ data class ChatTurn(
     val at: Long,
     /** 这一轮是否附了画面（抽帧图片 / 直传视频）。首轮带，追问不带 */
     val withMedia: Boolean,
+    /** 这一轮是否附了用户上传/框选的图片（不把图片本体写进历史） */
+    val hasImage: Boolean = false,
     /** 服务端返回的 token 用量；旧记录或服务端未返回时为 null */
     val usage: TokenUsage? = null
 )
@@ -93,6 +95,7 @@ class ChatStore(context: Context) {
                             answer = t.optString("a"),
                             at = t.optLong("at", 0L),
                             withMedia = t.optBoolean("media", false),
+                            hasImage = t.optBoolean("image", false),
                             usage = if (totalTokens > 0) {
                                 TokenUsage(promptTokens, completionTokens, totalTokens)
                             } else {
@@ -163,6 +166,7 @@ class ChatStore(context: Context) {
                     .put("a", t.answer)
                     .put("at", t.at)
                     .put("media", t.withMedia)
+                    .put("image", t.hasImage)
                 t.usage?.let {
                     turnJson
                         .put("prompt_tokens", it.promptTokens)

@@ -7,7 +7,9 @@ import android.content.ClipboardManager
 import android.content.ComponentCallbacks
 import android.content.Context
 import android.content.res.Configuration
+import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Rect
 import android.util.Log
 import android.view.ContextThemeWrapper
 import com.screenmemory.app.R
@@ -16,10 +18,12 @@ import com.screenmemory.app.chat.TokenUsage
 import com.screenmemory.app.ui.MathSymbolBar
 import com.screenmemory.app.util.Latex
 import com.screenmemory.app.util.Preview
+import com.screenmemory.app.util.ImagePayload
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.text.InputType
 import android.util.DisplayMetrics
 import android.util.TypedValue
@@ -30,10 +34,12 @@ import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.view.doOnLayout
 import io.noties.markwon.Markwon
 import io.noties.markwon.ext.latex.JLatexMathPlugin
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
@@ -52,8 +58,12 @@ class OverlayController(
     interface Listener {
         fun onHoldStart()
         fun onHoldEnd()
-        fun onSend(text: String)
+        fun onSend(text: String, imageBase64: String?)
         fun onStopService()
+        fun pickImage()
+
+        /** 用户已经框好区域，由持有 MediaProjection 的服务去取图 */
+        fun captureRegion(rect: Rect, onResult: (Bitmap?) -> Unit)
 
         /** 用户点了悬浮球、面板即将出现：此刻应当把画面截断 */
         fun onPanelOpened()
@@ -83,11 +93,47 @@ class OverlayController(
     private var renderedTurns: List<ChatTurn> = emptyList()
     private var renderedPendingQuestion: String? = null
     private var inputView: EditText? = null
+    private var attachmentRow: LinearLayout? = null
+    private var attachmentImage: ImageView? = null
     private var mathBar: MathSymbolBar? = null
     private var mathToggle: TextView? = null
     private var holdView: TextView? = null
     private var sendView: TextView? = null
     private var headerSubtitle: TextView? = null
+    private var pendingImageBase64: String? = null
+    private var pendingImageBitmap: Bitmap? = null
+    private var selectorRoot: View? = null
+    private var selectorView: RegionSelectorView? = null
+    private var screenshotInProgress = false
+    private var screenshotRequestId = 0
+
+    /** 流式渲染合并：模型 token 来得很快，逐字重排会让气泡和滚动位置抖动 */
+    private var streamRenderScheduled = false
+    private var pendingStreamView: TextView? = null
+    private var pendingStreamText: String? = null
+    private var lastStreamRenderAt = 0L
+    private var scrollSettleToken = 0L
+
+    private val streamRenderRunnable = Runnable {
+        streamRenderScheduled = false
+        val view = pendingStreamView
+        val text = pendingStreamText
+        pendingStreamView = null
+        pendingStreamText = null
+        if (destroyed || view == null || text == null || pendingAnswerView !== view) {
+            return@Runnable
+        }
+        val scroll = answerScroll
+        val followBottom = scroll != null && isScrolledToBottom(scroll)
+        val previousY = scroll?.scrollY ?: 0
+        lastStreamRenderAt = SystemClock.uptimeMillis()
+        if (text.isBlank()) {
+            view.setText("正在等待回答…")
+        } else {
+            renderStreamingMarkdown(view, text)
+        }
+        if (scroll != null) settleScroll(scroll, followBottom, previousY)
+    }
 
     /** 保留时长，可在运行时被设置页修改 */
     private var clipSeconds: Int = initialClipSeconds
@@ -468,8 +514,225 @@ class OverlayController(
         }
     }
 
+    // ------------------------------------------------------------------ 区域截图
+
+    private fun beginRegionScreenshot() {
+        if (screenshotInProgress) return
+        screenshotInProgress = true
+        hideKeyboard()
+        inputView?.clearFocus()
+        panel?.visibility = View.GONE
+        bubble?.visibility = View.GONE
+        main.post { showRegionSelector() }
+    }
+
+    private fun showRegionSelector() {
+        if (destroyed) {
+            finishScreenshot(null)
+            return
+        }
+        val root = FrameLayout(context)
+        val selector = RegionSelectorView(context)
+        root.addView(
+            selector,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+
+        root.addView(
+            TextView(context).apply {
+                text = "拖动框选要截取的区域"
+                setTextColor(Color.WHITE)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                setPadding(dp(12), dp(7), dp(12), dp(7))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(14).toFloat()
+                    setColor(0xAA000000.toInt())
+                }
+            },
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            ).apply { topMargin = dp(30) }
+        )
+
+        val bar = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(18).toFloat()
+                setColor(0xDD000000.toInt())
+            }
+        }
+        val cancel = selectorButton("取消") {
+            screenshotRequestId++
+            closeRegionSelector()
+            restorePanelAfterScreenshot()
+        }
+        val confirm = selectorButton("确认截图") {
+            val rect = selector.selectionRect()
+            if (rect != null) {
+                // 选区坐标是相对悬浮层内容区的，加上它在屏幕上的位置才是整屏坐标
+                val location = IntArray(2)
+                selector.getLocationOnScreen(location)
+                val screenRect = Rect(
+                    rect.left + location[0],
+                    rect.top + location[1],
+                    rect.right + location[0],
+                    rect.bottom + location[1]
+                )
+                closeRegionSelector()
+                startRegionCapture(screenRect)
+            }
+        }
+        confirm.isEnabled = false
+        confirm.alpha = 0.5f
+        selector.onSelectionChanged = { rect ->
+            confirm.isEnabled = rect != null
+            confirm.alpha = if (rect != null) 1f else 0.5f
+        }
+        bar.addView(
+            cancel,
+            LinearLayout.LayoutParams(0, dp(42), 1f).apply { rightMargin = dp(10) }
+        )
+        bar.addView(confirm, LinearLayout.LayoutParams(0, dp(42), 1f))
+        root.addView(
+            bar,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM
+            ).apply { bottomMargin = dp(28) }
+        )
+
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+        }
+        try {
+            wm.addView(root, lp)
+            selectorRoot = root
+            selectorView = selector
+        } catch (t: Throwable) {
+            Log.e(TAG, "add region selector failed", t)
+            closeRegionSelector()
+            finishScreenshot(null)
+            Toast.makeText(context, "无法打开选区，请检查悬浮窗权限", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun startRegionCapture(rect: Rect) {
+        val requestId = ++screenshotRequestId
+        // 选区层刚移除，等一帧再取图，确保截图里不会出现选区框
+        main.postDelayed({
+            if (destroyed || requestId != screenshotRequestId) return@postDelayed
+            listener.captureRegion(rect) { bitmap ->
+                main.post {
+                    if (requestId == screenshotRequestId) finishScreenshot(bitmap)
+                }
+            }
+            main.postDelayed({
+                if (requestId == screenshotRequestId && screenshotInProgress) {
+                    finishScreenshot(null)
+                }
+            }, 5000)
+        }, 150)
+    }
+
+    private fun finishScreenshot(bitmap: Bitmap?) {
+        screenshotInProgress = false
+        if (destroyed) {
+            bitmap?.recycle()
+            return
+        }
+        restorePanelAfterScreenshot()
+        if (bitmap != null) {
+            setAttachment(bitmap)
+            Toast.makeText(context, "截图已附上", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "截图失败，请重试", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun closeRegionSelector() {
+        val root = selectorRoot ?: return
+        try {
+            wm.removeView(root)
+        } catch (_: Throwable) {
+        }
+        selectorRoot = null
+        selectorView = null
+    }
+
+    private fun restorePanelAfterScreenshot() {
+        screenshotInProgress = false
+        panel?.visibility = View.VISIBLE
+        bubble?.visibility = if (panel != null) View.GONE else View.VISIBLE
+    }
+
+    private fun selectorButton(text: String, onClick: () -> Unit): TextView =
+        TextView(context).apply {
+            this.text = text
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(0xFF2F6BFF.toInt())
+            }
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { onClick() }
+        }
+
+    private fun setAttachment(bitmap: Bitmap) {
+        if (pendingImageBitmap !== bitmap) {
+            pendingImageBitmap?.recycle()
+        }
+        pendingImageBitmap = bitmap
+        pendingImageBase64 = ImagePayload.encode(bitmap)
+        attachmentImage?.setImageBitmap(bitmap)
+        attachmentRow?.visibility = View.VISIBLE
+    }
+
+    /** 相册选图回来时由服务调用；base64 已压缩好，直接用于预览和发送 */
+    fun setAttachmentBase64(base64: String) {
+        val bitmap = ImagePayload.decode(base64) ?: return
+        if (pendingImageBitmap !== bitmap) {
+            pendingImageBitmap?.recycle()
+        }
+        pendingImageBitmap = bitmap
+        pendingImageBase64 = base64
+        attachmentImage?.setImageBitmap(bitmap)
+        attachmentRow?.visibility = View.VISIBLE
+        Toast.makeText(context, "图片已附上", Toast.LENGTH_SHORT).show()
+    }
+
+    /** 发送成功后由服务清掉附图；失败时保留，方便直接重试 */
+    fun clearAttachment() {
+        pendingImageBase64 = null
+        attachmentImage?.setImageDrawable(null)
+        attachmentRow?.visibility = View.GONE
+        pendingImageBitmap?.recycle()
+        pendingImageBitmap = null
+    }
+
     /** 面板销毁后清掉所有子视图引用，避免状态栏/答案写到一个已经不在窗口里的 View 上 */
     private fun clearViewRefs() {
+        cancelPendingStreamRender()
+        closeRegionSelector()
+        clearAttachment()
+        attachmentRow = null
+        attachmentImage = null
         statusView = null
         warningView = null
         messageList = null
@@ -536,6 +799,16 @@ class OverlayController(
         )
         header.addView(
             TextView(context).apply {
+                text = "截图"
+                setTextColor(0xFF2F6BFF.toInt())
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setPadding(dp(8), dp(4), dp(8), dp(6))
+                contentDescription = "选择区域截图并附到问题"
+                setOnClickListener { beginRegionScreenshot() }
+            }
+        )
+        header.addView(
+            TextView(context).apply {
                 text = "隐藏"
                 setTextColor(0xFF2F6BFF.toInt())
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
@@ -586,6 +859,7 @@ class OverlayController(
         val answerBox = ScrollView(context).apply {
             visibility = View.INVISIBLE
             setBackgroundColor(0x00000000)
+            overScrollMode = View.OVER_SCROLL_NEVER
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
@@ -605,6 +879,57 @@ class OverlayController(
         }
         answerScroll = answerBox
         root.addView(answerBox)
+
+        val attachment = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10).toFloat()
+                setColor(0xFFF2F3F7.toInt())
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(6) }
+        }
+        val thumb = ImageView(context).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(0xFFE5E7EB.toInt())
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(52), dp(52))
+        }
+        attachmentImage = thumb
+        attachment.addView(thumb)
+        attachment.addView(
+            TextView(context).apply {
+                text = "截图已附上，发送时会一起交给模型"
+                setTextColor(0xFF6B7280.toInt())
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                setPadding(dp(10), 0, dp(6), 0)
+            },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        attachment.addView(
+            TextView(context).apply {
+                text = "×"
+                gravity = Gravity.CENTER
+                setTextColor(0xFF8A8F9C.toInt())
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+                setPadding(dp(8), 0, dp(4), dp(2))
+                contentDescription = "移除截图"
+                setOnClickListener { clearAttachment() }
+            }
+        )
+        attachmentRow = attachment
+        root.addView(attachment)
+        pendingImageBitmap?.let {
+            thumb.setImageBitmap(it)
+            attachment.visibility = View.VISIBLE
+        }
 
         val input = EditText(context).apply {
             hint = "有具体问题写这里，比如「第三行为什么能直接约掉」"
@@ -646,6 +971,25 @@ class OverlayController(
             setOnClickListener { toggleMathBar() }
         }
         mathToggle = toggle
+        mathToggleRow.addView(
+            TextView(context).apply {
+                text = "图片"
+                gravity = Gravity.CENTER
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                setTextColor(0xFF2F6BFF.toInt())
+                setPadding(dp(10), dp(3), dp(10), dp(3))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(9).toFloat()
+                    setColor(0xFFE8EFFF.toInt())
+                }
+                contentDescription = "从相册上传图片"
+                setOnClickListener { listener.pickImage() }
+            },
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { rightMargin = dp(6) }
+        )
         mathToggleRow.addView(
             toggle,
             LinearLayout.LayoutParams(
@@ -702,7 +1046,10 @@ class OverlayController(
             }
             layoutParams = LinearLayout.LayoutParams(0, dp(46), 1f)
             setOnClickListener {
-                listener.onSend(inputView?.text?.toString().orEmpty())
+                listener.onSend(
+                    inputView?.text?.toString().orEmpty(),
+                    pendingImageBase64
+                )
             }
         }
         sendView = send
@@ -789,6 +1136,7 @@ class OverlayController(
             val wasEmpty = renderedTurns.isEmpty() && renderedPendingQuestion == null
             val pendingAdded = pendingQuestion != null && pendingQuestion != renderedPendingQuestion
             if (snapshot.isEmpty() && pendingQuestion == null) {
+                cancelPendingStreamRender()
                 messages.removeAllViews()
                 pendingAnswerView = null
                 renderedTurns = emptyList()
@@ -799,13 +1147,15 @@ class OverlayController(
             val structureChanged =
                 snapshot != renderedTurns || pendingQuestion != renderedPendingQuestion
             if (structureChanged) {
+                cancelPendingStreamRender()
                 messages.removeAllViews()
                 pendingAnswerView = null
                 snapshot.forEachIndexed { index, turn ->
                     addMessage(
                         turn.question,
                         isUser = true,
-                        turnNumber = index + 1
+                        turnNumber = index + 1,
+                        hasImage = turn.hasImage
                     )
                     addMessage(
                         turn.answer,
@@ -819,7 +1169,8 @@ class OverlayController(
                     addMessage(
                         pendingQuestion,
                         isUser = true,
-                        turnNumber = pendingTurn
+                        turnNumber = pendingTurn,
+                        hasImage = pendingImageBase64 != null
                     )
                     pendingAnswerView = addMessage(
                         pendingAnswer.orEmpty(),
@@ -831,21 +1182,18 @@ class OverlayController(
                 renderedTurns = snapshot
                 renderedPendingQuestion = pendingQuestion
             } else if (pendingQuestion != null) {
-                pendingAnswerView?.let { view ->
-                    if (pendingAnswer.isNullOrBlank()) {
-                        view.setText("正在等待回答…")
-                    } else {
-                        renderStreamingMarkdown(view, pendingAnswer)
-                    }
-                    enableTextSelection(view)
-                }
+                pendingStreamView = pendingAnswerView
+                pendingStreamText = pendingAnswer.orEmpty()
+                scheduleStreamRender()
+                scroll.visibility = View.VISIBLE
+                return@post
             }
             scroll.visibility = View.VISIBLE
-            if (wasAtBottom || wasEmpty || pendingAdded) {
-                scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
-            } else {
-                scroll.post { scroll.scrollTo(0, previousScrollY) }
-            }
+            settleScroll(
+                scroll,
+                followBottom = wasAtBottom || wasEmpty || pendingAdded,
+                previousY = previousScrollY
+            )
         }
     }
 
@@ -855,10 +1203,40 @@ class OverlayController(
         return scroll.scrollY >= maxScroll - dp(24)
     }
 
+    private fun scheduleStreamRender() {
+        if (streamRenderScheduled) return
+        streamRenderScheduled = true
+        val delay = (STREAM_RENDER_INTERVAL_MS -
+            (SystemClock.uptimeMillis() - lastStreamRenderAt)).coerceAtLeast(0L)
+        main.postDelayed(streamRenderRunnable, delay)
+    }
+
+    private fun cancelPendingStreamRender() {
+        streamRenderScheduled = false
+        pendingStreamView = null
+        pendingStreamText = null
+        main.removeCallbacks(streamRenderRunnable)
+    }
+
+    /** 等这一轮文本真正完成布局后再滚动，避免 post 跑在 measure 之前造成来回跳 */
+    private fun settleScroll(scroll: ScrollView, followBottom: Boolean, previousY: Int) {
+        val token = ++scrollSettleToken
+        scroll.doOnLayout {
+            if (token != scrollSettleToken) return@doOnLayout
+            val child = scroll.getChildAt(0) ?: return@doOnLayout
+            val maxScroll = (child.measuredHeight - scroll.height).coerceAtLeast(0)
+            scroll.scrollTo(
+                0,
+                if (followBottom) maxScroll else previousY.coerceIn(0, maxScroll)
+            )
+        }
+    }
+
     private fun addMessage(
         message: String,
         isUser: Boolean,
         streaming: Boolean = false,
+        hasImage: Boolean = false,
         usage: TokenUsage? = null,
         turnNumber: Int? = null
     ): TextView {
@@ -878,6 +1256,7 @@ class OverlayController(
         val role = TextView(context).apply {
             text = buildString {
                 append(if (isUser) "你" else "AI 助手")
+                if (hasImage) append(" · 图片")
                 if (turnNumber != null) {
                     append(" · 第 ").append(turnNumber).append(" 轮")
                 }
@@ -886,8 +1265,9 @@ class OverlayController(
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
             setPadding(dp(4), 0, dp(4), dp(2))
         }
+        val maxBubbleWidth = minOf(metrics.widthPixels - dp(64), dp(420)).coerceAtLeast(dp(180))
         val bubble = EditText(themedContext).apply {
-            maxWidth = minOf(metrics.widthPixels - dp(64), dp(420)).coerceAtLeast(dp(180))
+            maxWidth = maxBubbleWidth
             setTextIsSelectable(true)
             isCursorVisible = false
             setShowSoftInputOnFocus(false)
@@ -963,7 +1343,8 @@ class OverlayController(
         column.addView(
             bubble,
             LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
+                // AI 气泡固定宽度：流式变长时不再反复改变换行宽度
+                if (isUser) LinearLayout.LayoutParams.WRAP_CONTENT else maxBubbleWidth,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
         )
@@ -1155,5 +1536,9 @@ class OverlayController(
     private fun panelHeightPx(): Int {
         val available = (metrics.heightPixels - dp(48)).coerceAtLeast(dp(240))
         return minOf(dp(500), available)
+    }
+
+    private companion object {
+        const val STREAM_RENDER_INTERVAL_MS = 80L
     }
 }

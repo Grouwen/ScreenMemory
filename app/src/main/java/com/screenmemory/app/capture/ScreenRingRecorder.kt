@@ -2,13 +2,19 @@ package com.screenmemory.app.capture
 
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.graphics.Bitmap
+import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import android.media.Image
+import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.util.Log
 import android.view.Surface
@@ -16,9 +22,11 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.util.ArrayDeque
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.Executors
 
 /**
@@ -661,6 +669,158 @@ class ScreenRingRecorder(
     }
 
     fun isFrozen(): Boolean = frozenEndUs != null
+
+    /**
+     * 用户框选后截一张图。
+     *
+     * Android 14 / targetSdk 34 的 MediaProjection 只能创建一个 VirtualDisplay，
+     * 所以这里复用录制器已有的 VirtualDisplay：临时把它的输出切到 ImageReader，
+     * 截完再切回编码器的 Surface。切换期间视频会有很短的停顿，但不会另建虚拟屏。
+     */
+    fun captureRegion(
+        screenRegion: Rect,
+        screenWidth: Int,
+        screenHeight: Int,
+        screenDpi: Int
+    ): Bitmap? {
+        if (!running.get() || screenWidth <= 0 || screenHeight <= 0) return null
+        val done = CountDownLatch(1)
+        val result = AtomicReference<Bitmap?>(null)
+        try {
+            videoControl.execute {
+                try {
+                    synchronized(videoLifecycleLock) {
+                        result.set(
+                            captureRegionLocked(
+                                screenRegion,
+                                screenWidth,
+                                screenHeight,
+                                screenDpi
+                            )
+                        )
+                    }
+                } catch (t: Throwable) {
+                    Log.e(TAG, "capture region failed", t)
+                } finally {
+                    done.countDown()
+                }
+            }
+            done.await(4, TimeUnit.SECONDS)
+        } catch (_: RejectedExecutionException) {
+            return null
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+        return result.get()
+    }
+
+    private fun captureRegionLocked(
+        screenRegion: Rect,
+        screenWidth: Int,
+        screenHeight: Int,
+        screenDpi: Int
+    ): Bitmap? {
+        val display = virtualDisplay ?: return null
+        val encoderSurface = inputSurface ?: return null
+        val recordWidth = currentWidth
+        val recordHeight = currentHeight
+        val recordDpi = currentDpi
+
+        val reader = ImageReader.newInstance(
+            screenWidth,
+            screenHeight,
+            PixelFormat.RGBA_8888,
+            2
+        )
+        val imageRef = AtomicReference<Image?>(null)
+        val frameReady = CountDownLatch(1)
+        val thread = HandlerThread("region-shot")
+        thread.start()
+        val handler = Handler(thread.looper)
+        reader.setOnImageAvailableListener({ source ->
+            val image = try {
+                source.acquireLatestImage()
+            } catch (_: Throwable) {
+                null
+            }
+            if (image != null && imageRef.compareAndSet(null, image)) {
+                frameReady.countDown()
+            } else {
+                image?.close()
+            }
+        }, handler)
+
+        var bitmap: Bitmap? = null
+        try {
+            display.setSurface(null)
+            display.resize(screenWidth, screenHeight, screenDpi)
+            display.setSurface(reader.surface)
+            if (frameReady.await(2, TimeUnit.SECONDS)) {
+                val image = imageRef.get()
+                if (image != null) {
+                    bitmap = cropBitmap(
+                        imageToBitmap(image),
+                        screenRegion,
+                        screenWidth,
+                        screenHeight
+                    )
+                }
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "capture frame failed", t)
+        } finally {
+            imageRef.getAndSet(null)?.close()
+            try {
+                display.setSurface(null)
+                display.resize(recordWidth, recordHeight, recordDpi)
+                display.setSurface(encoderSurface)
+            } catch (t: Throwable) {
+                Log.e(TAG, "restore recorder surface failed", t)
+            }
+            try {
+                reader.close()
+            } catch (_: Throwable) {
+            }
+            thread.quitSafely()
+        }
+        return bitmap
+    }
+
+    private fun imageToBitmap(image: Image): Bitmap {
+        val plane = image.planes[0]
+        val buffer = plane.buffer
+        buffer.rewind()
+        val pixelStride = plane.pixelStride.coerceAtLeast(1)
+        val rowStride = plane.rowStride
+        val paddedWidth = rowStride / pixelStride
+        val bitmap = Bitmap.createBitmap(
+            paddedWidth.coerceAtLeast(image.width),
+            image.height,
+            Bitmap.Config.ARGB_8888
+        )
+        bitmap.copyPixelsFromBuffer(buffer)
+        if (bitmap.width == image.width) return bitmap
+        val cropped = Bitmap.createBitmap(bitmap, 0, 0, image.width, image.height)
+        bitmap.recycle()
+        return cropped
+    }
+
+    private fun cropBitmap(
+        source: Bitmap,
+        region: Rect,
+        screenWidth: Int,
+        screenHeight: Int
+    ): Bitmap? {
+        val scaleX = source.width.toFloat() / screenWidth.coerceAtLeast(1)
+        val scaleY = source.height.toFloat() / screenHeight.coerceAtLeast(1)
+        val left = (region.left * scaleX).toInt().coerceIn(0, source.width - 1)
+        val top = (region.top * scaleY).toInt().coerceIn(0, source.height - 1)
+        val right = (region.right * scaleX).toInt().coerceIn(left + 1, source.width)
+        val bottom = (region.bottom * scaleY).toInt().coerceIn(top + 1, source.height)
+        val cropped = Bitmap.createBitmap(source, left, top, right - left, bottom - top)
+        if (cropped !== source) source.recycle()
+        return cropped
+    }
 
     /** 缓冲区里最新一帧的时间戳（微秒），空缓冲返回 0 */
     fun latestPtsUs(): Long = synchronized(lock) {

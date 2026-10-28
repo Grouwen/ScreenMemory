@@ -79,12 +79,14 @@ class QwenVideoClient(private val prefs: Prefs) {
         systemPrompt: String,
         onStatus: (String) -> Unit,
         onDelta: (String) -> Unit = {},
-        history: List<ChatTurn> = emptyList()
+        history: List<ChatTurn> = emptyList(),
+        imageBase64: String? = null
     ): ModelAnswer {
         val key = prefs.qwenKey().trim()
         if (key.isEmpty()) throw IOException("请先填写百炼（DashScope）API Key")
         val useVideo = video != null && video.exists() && video.length() > 0L
-        if (!useVideo && history.isEmpty()) throw IOException("视频文件为空")
+        val useImage = !imageBase64.isNullOrBlank()
+        if (!useVideo && !useImage && history.isEmpty()) throw IOException("没有可发送的画面")
         val model = prefs.qwenModel()
 
         // 已经开始吐字了就不能再降级重试，否则用户会看到两份答案
@@ -117,11 +119,13 @@ class QwenVideoClient(private val prefs: Prefs) {
             )
         }
 
-        // 追问：只带文字历史，不重新上传
+        // 追问或只附图：只带文字历史，不重新上传视频
         if (!useVideo || video == null) {
-            onStatus("追问中（沿用上一轮的画面）…")
-            sentVia = "text"
-            val answer = chat(key, null, question, systemPrompt, history, forward)
+            onStatus(if (useImage) "模型正在看截图…" else "追问中（沿用上一轮的画面）…")
+            sentVia = if (useImage) "image" else "text"
+            val answer = chat(
+                key, null, question, systemPrompt, history, forward, imageBase64
+            )
             reportPhases()
             return answer
         }
@@ -139,7 +143,9 @@ class QwenVideoClient(private val prefs: Prefs) {
             sentVia = "oss"
             onStatus("模型正在看这段视频…")
             try {
-                val answer = chat(key, ossUrl, question, systemPrompt, history, forward)
+                val answer = chat(
+                    key, ossUrl, question, systemPrompt, history, forward, imageBase64
+                )
                 reportPhases()
                 return answer
             } catch (t: Throwable) {
@@ -148,14 +154,37 @@ class QwenVideoClient(private val prefs: Prefs) {
             }
         }
 
-        if (video.length() < BASE64_MAX_BYTES) {
-            sentVia = "base64"
-            onStatus("改用 base64 内联重试…")
+        // 部分模型不接受「视频 + 截图」同一条请求：只要还没开始吐字，就自动改发截图
+        if (useImage) {
+            sentVia = "image-fallback"
+            onStatus("视频和截图一起发送失败，改发截图…")
             val answer = chat(
-                key, "data:video/mp4;base64," + base64(video), question, systemPrompt, history, forward
+                key, null, question, systemPrompt, history, forward, imageBase64
             )
             reportPhases()
             return answer
+        }
+
+        if (video.length() < BASE64_MAX_BYTES) {
+            sentVia = "base64"
+            onStatus("改用 base64 内联重试…")
+            try {
+                val answer = chat(
+                    key, "data:video/mp4;base64," + base64(video),
+                    question, systemPrompt, history, forward, imageBase64
+                )
+                reportPhases()
+                return answer
+            } catch (t: Throwable) {
+                if (emitted || !useImage) throw t
+                onStatus("视频内联发送失败，改发截图…")
+                sentVia = "image-fallback"
+                val answer = chat(
+                    key, null, question, systemPrompt, history, forward, imageBase64
+                )
+                reportPhases()
+                return answer
+            }
         }
 
         val reason = lastUploadError?.message?.take(200).orEmpty()
@@ -273,12 +302,14 @@ class QwenVideoClient(private val prefs: Prefs) {
         question: String,
         systemPrompt: String,
         history: List<ChatTurn>,
-        onDelta: (String) -> Unit
+        onDelta: (String) -> Unit,
+        imageBase64: String? = null
     ): ModelAnswer {
         val thinking = prefs.enableThinking()
         return try {
             chatOnce(
                 key, videoUrl, question, systemPrompt, history, onDelta,
+                imageBase64 = imageBase64,
                 thinking = thinking,
                 includeUsage = true
             )
@@ -292,6 +323,7 @@ class QwenVideoClient(private val prefs: Prefs) {
                 try {
                     return chatOnce(
                         key, videoUrl, question, systemPrompt, history, onDelta,
+                        imageBase64 = imageBase64,
                         thinking = null,
                         includeUsage = true
                     )
@@ -303,6 +335,7 @@ class QwenVideoClient(private val prefs: Prefs) {
                 try {
                     return chatOnce(
                         key, videoUrl, question, systemPrompt, history, onDelta,
+                        imageBase64 = imageBase64,
                         thinking = thinking,
                         includeUsage = false
                     )
@@ -315,6 +348,7 @@ class QwenVideoClient(private val prefs: Prefs) {
             Log.w(TIMING_TAG, "模型不接受 stream usage，关闭 usage 后重试")
             chatOnce(
                 key, videoUrl, question, systemPrompt, history, onDelta,
+                imageBase64 = imageBase64,
                 thinking = null,
                 includeUsage = false
             )
@@ -328,17 +362,31 @@ class QwenVideoClient(private val prefs: Prefs) {
         systemPrompt: String,
         history: List<ChatTurn>,
         onDelta: (String) -> Unit,
+        imageBase64: String?,
         thinking: Boolean?,
         includeUsage: Boolean
     ): ModelAnswer {
-        val intro = if (videoUrl == null && history.isNotEmpty()) {
-            question + "\n\n（这是追问，不再重复上传视频：画面和你上一轮看到的是同一段，请沿用上文里的画面信息）"
-        } else {
-            question
+        val intro = when {
+            imageBase64 != null && videoUrl == null && history.isNotEmpty() ->
+                question + "\n\n（这是追问，另外附了一张用户框选的截图，请优先参考这张图，上一轮画面仍可参考）"
+            imageBase64 != null ->
+                question + "\n\n（用户附了一张框选的截图，请参考这张图回答）"
+            videoUrl == null && history.isNotEmpty() ->
+                question + "\n\n（这是追问，不再重复上传视频：画面和你上一轮看到的是同一段，请沿用上文里的画面信息）"
+            else -> question
         }
         val fps = prefs.videoFps
         val content = JSONArray()
             .put(JSONObject().put("type", "text").put("text", intro))
+        if (imageBase64 != null) {
+            content.put(
+                JSONObject().put("type", "image_url")
+                    .put(
+                        "image_url",
+                        JSONObject().put("url", "data:image/jpeg;base64,$imageBase64")
+                    )
+            )
+        }
         if (videoUrl != null) {
             content.put(
                 JSONObject().put("type", "video_url")
