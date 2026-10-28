@@ -14,6 +14,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.RadioButton
+import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -559,7 +560,7 @@ class MainActivity : AppCompatActivity() {
                     conv.turns.lastOrNull()?.answer?.trim()?.replace('\n', ' ').orEmpty()
                 ).ifBlank { "（没有回答）" }
             item.setOnClickListener { openHistoryDetail(conv) }
-            item.findViewById<TextView>(R.id.tvItemDelete).setOnClickListener {
+            item.findViewById<ImageView>(R.id.ivItemDelete).setOnClickListener {
                 confirmDeleteConversation(store, conv)
             }
             // 使用 XML 中定义的卡片外边距，让相邻记录保持清晰间距。

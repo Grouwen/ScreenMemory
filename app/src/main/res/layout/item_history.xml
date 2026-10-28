@@ -36,22 +36,19 @@
                 android:textSize="16sp"
                 android:textStyle="bold" />
 
-            <TextView
-                android:id="@+id/tvItemDelete"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="10dp"
+            <ImageView
+                android:id="@+id/ivItemDelete"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginStart="4dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:clickable="true"
                 android:contentDescription="删除这段对话"
                 android:focusable="true"
-                android:paddingStart="8dp"
-                android:paddingTop="4dp"
-                android:paddingEnd="4dp"
-                android:paddingBottom="6dp"
-                android:text="删除"
-                android:textColor="#D92D20"
-                android:textSize="12sp" />
+                android:padding="10dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_delete"
+                app:tint="?attr/colorError" />
         </LinearLayout>
 
         <TextView
