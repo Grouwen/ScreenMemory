@@ -88,6 +88,8 @@ class HistoryDetailActivity : AppCompatActivity() {
     private lateinit var followStatus: TextView
     private lateinit var imageRow: LinearLayout
     private lateinit var imagePreview: ImageView
+    private lateinit var mathHost: LinearLayout
+    private lateinit var mathToggle: TextView
 
     private var pendingImageBase64: String? = null
     private var pendingImageBitmap: Bitmap? = null
@@ -155,7 +157,10 @@ class HistoryDetailActivity : AppCompatActivity() {
             imagePicker.launch("image/*")
         }
         findViewById<TextView>(R.id.tvBack).setOnClickListener { finish() }
-        findViewById<LinearLayout>(R.id.mathKeyboardHost).addView(
+        mathHost = findViewById(R.id.mathKeyboardHost)
+        mathToggle = findViewById(R.id.tvMathToggle)
+        mathToggle.setOnClickListener { toggleMathKeyboard() }
+        mathHost.addView(
             MathSymbolBar(this) { input }
         )
 
@@ -238,16 +243,15 @@ class HistoryDetailActivity : AppCompatActivity() {
             setTextColor(themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant))
             setPadding(dp(4), 0, dp(4), dp(3))
         }
-        val bubble = EditText(this).apply {
+        // 用 TextView 而不是 EditText：气泡只需要「长按选中 + 复制」，
+        // 用 EditText 时长按会弹出含粘贴/剪切的编辑菜单，AI 的回答能被改掉。
+        val bubble = TextView(this).apply {
             maxWidth = minOf(
                 (resources.displayMetrics.widthPixels * 0.82f).toInt(),
                 dp(560)
             )
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setTextIsSelectable(true)
-            isCursorVisible = false
-            setShowSoftInputOnFocus(false)
-            setSelectAllOnFocus(false)
             setLineSpacing(dp(4).toFloat(), 1f)
             setPadding(dp(14), dp(10), dp(14), dp(10))
             setBackgroundResource(
@@ -340,13 +344,9 @@ class HistoryDetailActivity : AppCompatActivity() {
         resources.displayMetrics
     ).toInt()
 
+    /** 气泡只允许长按选中、复制，不允许编辑（不要换成 EditText） */
     private fun enableTextSelection(view: TextView) {
         view.setTextIsSelectable(true)
-        view.isFocusableInTouchMode = true
-        if (view is EditText) {
-            view.isCursorVisible = false
-            view.setShowSoftInputOnFocus(false)
-        }
     }
 
     private fun clearImageAttachment() {
@@ -463,6 +463,15 @@ class HistoryDetailActivity : AppCompatActivity() {
                 input.isEnabled = true
             }
         }
+    }
+
+    /** 和悬浮窗一致：符号栏默认收起，点「∑ 符号」展开，避免挤压对话区 */
+    private fun toggleMathKeyboard() {
+        val show = mathHost.visibility != View.VISIBLE
+        mathHost.visibility = if (show) View.VISIBLE else View.GONE
+        mathToggle.text = if (show) "∑ 收起" else "∑ 符号"
+        mathToggle.contentDescription =
+            if (show) "收起数学符号栏" else "展开数学符号栏"
     }
 
     private fun hideKeyboard() {

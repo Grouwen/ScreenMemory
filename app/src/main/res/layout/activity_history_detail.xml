@@ -123,11 +123,35 @@
                 android:textSize="18sp" />
         </LinearLayout>
 
+        <!-- 和悬浮窗保持一致：符号栏默认收起，点「∑ 符号」展开，避免挤压对话区 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="end"
+            android:orientation="horizontal"
+            android:paddingBottom="2dp">
+
+            <TextView
+                android:id="@+id/tvMathToggle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_math_chip"
+                android:contentDescription="展开数学符号栏"
+                android:paddingStart="9dp"
+                android:paddingTop="3dp"
+                android:paddingEnd="9dp"
+                android:paddingBottom="3dp"
+                android:text="∑ 符号"
+                android:textColor="?attr/colorPrimary"
+                android:textSize="11.5sp" />
+        </LinearLayout>
+
         <LinearLayout
             android:id="@+id/mathKeyboardHost"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical" />
+            android:orientation="vertical"
+            android:visibility="gone" />
 
         <LinearLayout
             android:layout_width="match_parent"
