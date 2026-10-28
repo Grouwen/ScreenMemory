@@ -48,6 +48,12 @@
             android:label="对话详情"
             android:theme="@style/Theme.ScreenMemory" />
 
+        <!-- 看大图：全屏黑底，单击/返回关闭 -->
+        <activity
+            android:name=".ImageViewerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.ScreenMemory" />
+
         <!-- 不要加 noHistory：现在要先弹权限框、再打开相册，
              中途本 Activity 会进入后台，加了会被系统提前销毁导致收不到选图结果 -->
         <activity

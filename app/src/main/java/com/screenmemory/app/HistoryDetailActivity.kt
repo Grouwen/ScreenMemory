@@ -307,9 +307,10 @@ class HistoryDetailActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
         )
-        // 这一轮附过的图片：从本地文件读缩略图贴在气泡上方
+        // 这一轮附过的图片：从本地文件读缩略图贴在气泡上方，点开看大图
         if (isUser) {
-            ChatImages.loadThumbnail(this, imagePath)?.let { bitmap ->
+            val fileName = imagePath
+            ChatImages.loadThumbnail(this, fileName)?.let { bitmap ->
                 column.addView(
                     ImageView(this).apply {
                         scaleType = ImageView.ScaleType.CENTER_CROP
@@ -319,6 +320,17 @@ class HistoryDetailActivity : AppCompatActivity() {
                             setColor(themeColor(com.google.android.material.R.attr.colorSurfaceVariant))
                         }
                         clipToOutline = true
+                        if (fileName != null) {
+                            isClickable = true
+                            setOnClickListener {
+                                startActivity(
+                                    ImageViewerActivity.intent(
+                                        this@HistoryDetailActivity,
+                                        ChatImages.file(this@HistoryDetailActivity, fileName).absolutePath
+                                    )
+                                )
+                            }
+                        }
                     },
                     LinearLayout.LayoutParams(dp(168), dp(126)).apply {
                         bottomMargin = dp(4)
