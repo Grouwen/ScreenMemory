@@ -25,6 +25,8 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.text.InputType
+import android.text.SpannableStringBuilder
+import android.text.Spanned
 import android.util.DisplayMetrics
 import android.util.TypedValue
 import android.view.Gravity
@@ -113,6 +115,20 @@ class OverlayController(
     private var pendingStreamText: String? = null
     private var lastStreamRenderAt = 0L
     private var scrollSettleToken = 0L
+
+    /**
+     * 流式渲染的 Markdown 缓存。
+     *
+     * 只有「已经写完的完整行」才交给 Markwon 解析，正在写的最后一行按纯文本追加；
+     * 并且完整行没变化时直接复用上一次解析出来的 Spanned，避免每 80ms 重新解析
+     * 一遍 Markdown + 重建 LaTeX 位图（这是滚动/文字抖动的主要来源）。
+     */
+    private var lastStableText: String? = null
+    private var lastStableRendered: Spanned? = null
+
+    /** 正在流式输出的那个气泡，完成时原地替换成终态，避免整棵消息列表重建 */
+    private var pendingAnswerColumn: LinearLayout? = null
+    private var pendingAnswerMetaView: TextView? = null
 
     private val streamRenderRunnable = Runnable {
         streamRenderScheduled = false
@@ -738,6 +754,8 @@ class OverlayController(
         messageList = null
         answerScroll = null
         pendingAnswerView = null
+        pendingAnswerColumn = null
+        pendingAnswerMetaView = null
         renderedTurns = emptyList()
         renderedPendingQuestion = null
         inputView = null
@@ -1139,6 +1157,8 @@ class OverlayController(
                 cancelPendingStreamRender()
                 messages.removeAllViews()
                 pendingAnswerView = null
+                pendingAnswerColumn = null
+                pendingAnswerMetaView = null
                 renderedTurns = emptyList()
                 renderedPendingQuestion = null
                 scroll.visibility = View.INVISIBLE
@@ -1146,6 +1166,71 @@ class OverlayController(
             }
             val structureChanged =
                 snapshot != renderedTurns || pendingQuestion != renderedPendingQuestion
+
+            // 追加式提问：历史没变、只是多了一个待回答的问题时，直接往列表尾部追加两个
+            // 气泡，而不是把之前所有气泡清掉重建（重建会重解析每个历史气泡的 Markdown，
+            // 界面会整块闪一下，长对话时还会卡几百毫秒）。
+            val appendQuestion = pendingQuestion?.takeIf {
+                renderedPendingQuestion == null &&
+                    snapshot == renderedTurns &&
+                    (messageList?.childCount ?: 0) > 0
+            }
+            if (appendQuestion != null) {
+                cancelPendingStreamRender()
+                val pendingTurn = snapshot.size + 1
+                addMessage(
+                    appendQuestion,
+                    isUser = true,
+                    turnNumber = pendingTurn,
+                    hasImage = pendingImageBase64 != null
+                )
+                pendingAnswerView = addMessage(
+                    pendingAnswer.orEmpty(),
+                    isUser = false,
+                    streaming = true,
+                    turnNumber = pendingTurn
+                )
+                renderedPendingQuestion = pendingQuestion
+                scroll.visibility = View.VISIBLE
+                settleScroll(scroll, followBottom = true, previousY = previousScrollY)
+                return@post
+            }
+
+            // 回答刚写完（pending 变成正式轮次）：把流式气泡原地换成终态。
+            // 走重建的话会把列表里所有气泡重新解析一遍 Markdown/LaTeX，
+            // 用户会看到整块闪一下、滚动位置回跳几像素。
+            val finalizing = pendingQuestion == null &&
+                renderedPendingQuestion != null &&
+                pendingAnswerView != null &&
+                snapshot.size == renderedTurns.size + 1
+            if (finalizing) {
+                val turn = snapshot.last()
+                val answerView = pendingAnswerView
+                if (answerView != null) {
+                    cancelPendingStreamRender()
+                    renderMarkdown(answerView, turn.answer)
+                    pendingAnswerMetaView?.text =
+                        roleLabel(isUser = false, hasImage = false, turnNumber = snapshot.size)
+                    turn.usage?.takeIf { it.isKnown }?.let { usage ->
+                        pendingAnswerColumn?.addView(
+                            usageView(usage),
+                            LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.WRAP_CONTENT,
+                                LinearLayout.LayoutParams.WRAP_CONTENT
+                            )
+                        )
+                    }
+                }
+                pendingAnswerView = null
+                pendingAnswerColumn = null
+                pendingAnswerMetaView = null
+                renderedTurns = snapshot
+                renderedPendingQuestion = null
+                scroll.visibility = View.VISIBLE
+                settleScroll(scroll, followBottom = wasAtBottom, previousY = previousScrollY)
+                return@post
+            }
+
             if (structureChanged) {
                 cancelPendingStreamRender()
                 messages.removeAllViews()
@@ -1215,6 +1300,8 @@ class OverlayController(
         streamRenderScheduled = false
         pendingStreamView = null
         pendingStreamText = null
+        lastStableText = null
+        lastStableRendered = null
         main.removeCallbacks(streamRenderRunnable)
     }
 
@@ -1254,13 +1341,7 @@ class OverlayController(
             gravity = if (isUser) Gravity.END else Gravity.START
         }
         val role = TextView(context).apply {
-            text = buildString {
-                append(if (isUser) "你" else "AI 助手")
-                if (hasImage) append(" · 图片")
-                if (turnNumber != null) {
-                    append(" · 第 ").append(turnNumber).append(" 轮")
-                }
-            }
+            text = roleLabel(isUser, hasImage, turnNumber)
             setTextColor(0xFF8A8F9C.toInt())
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
             setPadding(dp(4), 0, dp(4), dp(2))
@@ -1350,12 +1431,7 @@ class OverlayController(
         )
         if (!isUser && usage?.isKnown == true) {
             column.addView(
-                TextView(context).apply {
-                    text = "本轮 · " + usage.detailLabel()
-                    setTextColor(0xFF8A8F9C.toInt())
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
-                    setPadding(dp(4), dp(3), dp(4), 0)
-                },
+                usageView(usage),
                 LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
@@ -1370,7 +1446,28 @@ class OverlayController(
             )
         )
         messages.addView(row)
+        if (streaming) {
+            // 记住流式气泡，回答写完时原地换内容，不再整棵列表重建
+            pendingAnswerColumn = column
+            pendingAnswerMetaView = role
+        }
         return bubble
+    }
+
+    private fun roleLabel(isUser: Boolean, hasImage: Boolean, turnNumber: Int?): String =
+        buildString {
+            append(if (isUser) "你" else "AI 助手")
+            if (hasImage) append(" · 图片")
+            if (turnNumber != null) {
+                append(" · 第 ").append(turnNumber).append(" 轮")
+            }
+        }
+
+    private fun usageView(usage: TokenUsage): TextView = TextView(context).apply {
+        text = "本轮 · " + usage.detailLabel()
+        setTextColor(0xFF8A8F9C.toInt())
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+        setPadding(dp(4), dp(3), dp(4), 0)
     }
 
     /** 确保在非 Activity 的悬浮窗里也能长按选择范围并使用系统复制菜单。 */
@@ -1485,25 +1582,63 @@ class OverlayController(
         }
     }
 
+    /**
+     * 流式渲染：只把「已经写完的整行」交给 Markdown 解析，末尾正在写的那一行按纯文本追加。
+     *
+     * 半截 Markdown 的结构是不稳定的：`- ` 一出现就变列表、`## ` 一出现就变标题、
+     * 表格分隔行一到就整段变表格、未闭合的 `**` 会把后面全部加粗 —— 每 80ms 重排一次，
+     * 用户看到的就是文字在跳。按行切分后，一行只有在换行符到达时才定型，
+     * 一屏内容最多每行跳一次，而不是每帧跳。
+     *
+     * 完整行部分还做了缓存：前缀没变就复用上次解析出来的 Spanned，不重复跑
+     * Markwon 解析和 LaTeX 位图生成。
+     */
     private fun renderStreamingMarkdown(view: TextView, markdown: String) {
         val safe = Latex.forStreaming(markdown)
+        val split = safe.lastIndexOf('\n')
+        val stable = if (split >= 0) safe.substring(0, split + 1) else ""
+        val tail = if (split >= 0) safe.substring(split + 1) else safe
+
+        val builder = SpannableStringBuilder()
+        if (stable.isNotBlank()) {
+            val rendered = stableRendered(stable)
+            if (rendered != null) builder.append(rendered) else builder.append(Preview.plain(stable))
+        }
+        if (tail.isNotEmpty()) builder.append(tail)
+
+        if (builder.isEmpty()) {
+            view.setText("正在等待回答…")
+        } else {
+            view.setText(builder)
+        }
+    }
+
+    /** 完整行部分的 Markdown，前缀不变时复用上一次的结果 */
+    private fun stableRendered(stable: String): Spanned? {
+        if (stable == lastStableText) return lastStableRendered
+        val rendered = renderToSpanned(stable) ?: return null
+        lastStableText = stable
+        lastStableRendered = rendered
+        return rendered
+    }
+
+    /** 用完整渲染器解析，失败再用降级渲染器；都失败返回 null 由调用方走纯文本 */
+    private fun renderToSpanned(markdown: String): Spanned? {
         markwonFull?.let { renderer ->
             try {
-                renderer.setMarkdown(view, safe)
-                return
+                return renderer.toMarkdown(markdown)
             } catch (t: Throwable) {
                 Log.w(TAG, "stream markdown render failed", t)
             }
         }
         markwonBasic?.let { renderer ->
             try {
-                renderer.setMarkdown(view, safe)
-                return
+                return renderer.toMarkdown(markdown)
             } catch (t: Throwable) {
                 Log.w(TAG, "stream basic markdown render failed", t)
             }
         }
-        view.text = Preview.plain(safe)
+        return null
     }
 
     fun setBusy(busy: Boolean) {
