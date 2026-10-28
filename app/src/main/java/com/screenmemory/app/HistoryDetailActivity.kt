@@ -16,6 +16,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.screenmemory.app.chat.ChatStore
@@ -25,6 +26,7 @@ import com.screenmemory.app.chat.TokenUsage
 import com.screenmemory.app.net.LlmClient
 import com.screenmemory.app.net.QwenVideoClient
 import com.screenmemory.app.ui.MathSymbolBar
+import com.screenmemory.app.util.ImageAccess
 import com.screenmemory.app.util.Latex
 import com.screenmemory.app.util.Preview
 import com.screenmemory.app.util.ImagePayload
@@ -94,7 +96,20 @@ class HistoryDetailActivity : AppCompatActivity() {
     private var pendingImageBase64: String? = null
     private var pendingImageBitmap: Bitmap? = null
 
-    private val imagePicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+    private val imagePermission = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { granted ->
+        if (granted.values.any { it }) {
+            launchImagePicker()
+        } else {
+            onImagePermissionDenied()
+        }
+    }
+
+    private val imagePicker = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val uri = if (result.resultCode == RESULT_OK) result.data?.data else null
         if (uri == null) return@registerForActivityResult
         val payload = ImagePayload.fromUri(this, uri)
         if (payload == null) {
@@ -154,7 +169,7 @@ class HistoryDetailActivity : AppCompatActivity() {
             clearImageAttachment()
         }
         findViewById<Button>(R.id.btnFollowImage).setOnClickListener {
-            imagePicker.launch("image/*")
+            requestImage()
         }
         findViewById<TextView>(R.id.tvBack).setOnClickListener { finish() }
         mathHost = findViewById(R.id.mathKeyboardHost)
@@ -472,6 +487,42 @@ class HistoryDetailActivity : AppCompatActivity() {
         mathToggle.text = if (show) "∑ 收起" else "∑ 符号"
         mathToggle.contentDescription =
             if (show) "收起数学符号栏" else "展开数学符号栏"
+    }
+
+    /** 点「图片」：没权限先申请，有权限直接打开系统相册 */
+    private fun requestImage() {
+        if (ImageAccess.hasAccess(this)) {
+            launchImagePicker()
+        } else {
+            imagePermission.launch(ImageAccess.permissions())
+        }
+    }
+
+    private fun launchImagePicker() {
+        try {
+            imagePicker.launch(ImageAccess.pickerIntent())
+        } catch (t: Throwable) {
+            Log.w(TAG, "open gallery failed, fallback to document picker", t)
+            try {
+                imagePicker.launch(ImageAccess.fallbackIntent())
+            } catch (t2: Throwable) {
+                Toast.makeText(this, "没有找到可用的相册应用", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /** 拒绝权限：还能再问就只提示；勾了「不再询问」就只能引导去设置页 */
+    private fun onImagePermissionDenied() {
+        if (!ImageAccess.isPermanentlyDenied(this)) {
+            Toast.makeText(this, "需要相册权限才能选择图片", Toast.LENGTH_SHORT).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("需要相册权限")
+            .setMessage("你已经拒绝过相册权限，再点一次也不会弹窗了。去系统设置里手动打开「照片和视频」权限，就能选图提问。")
+            .setPositiveButton("去设置") { _, _ -> ImageAccess.openAppSettings(this) }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private fun hideKeyboard() {

@@ -10,6 +10,13 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- 相册选图：Android 13 起细分媒体权限；14 起还有「部分照片」；12 及以下用存储权限 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <!-- Android 11+ 包可见性：不加这段，SpeechRecognizer.isRecognitionAvailable() 会误判为不可用 -->
     <queries>
         <intent>
@@ -41,11 +48,12 @@
             android:label="对话详情"
             android:theme="@style/Theme.ScreenMemory" />
 
+        <!-- 不要加 noHistory：现在要先弹权限框、再打开相册，
+             中途本 Activity 会进入后台，加了会被系统提前销毁导致收不到选图结果 -->
         <activity
             android:name=".ImagePickerActivity"
             android:exported="false"
             android:excludeFromRecents="true"
-            android:noHistory="true"
             android:theme="@style/Theme.ScreenMemory.Transparent" />
 
         <service
