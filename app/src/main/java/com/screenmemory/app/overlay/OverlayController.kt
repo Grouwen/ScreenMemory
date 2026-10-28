@@ -125,6 +125,8 @@ class OverlayController(
      */
     private var lastStableText: String? = null
     private var lastStableRendered: Spanned? = null
+    private var lastTailText: String? = null
+    private var lastTailRendered: Spanned? = null
 
     /** 正在流式输出的那个气泡，完成时原地替换成终态，避免整棵消息列表重建 */
     private var pendingAnswerColumn: LinearLayout? = null
@@ -1302,6 +1304,8 @@ class OverlayController(
         pendingStreamText = null
         lastStableText = null
         lastStableRendered = null
+        lastTailText = null
+        lastTailRendered = null
         main.removeCallbacks(streamRenderRunnable)
     }
 
@@ -1593,6 +1597,16 @@ class OverlayController(
      * 完整行部分还做了缓存：前缀没变就复用上次解析出来的 Spanned，不重复跑
      * Markwon 解析和 LaTeX 位图生成。
      */
+    /**
+     * 流式渲染：完整行交给 Markdown 解析并缓存，末尾正在写的那一行单独解析。
+     *
+     * 半截 Markdown 的结构是不稳定的：`- ` 一出现就变列表、`## ` 一出现就变标题、
+     * 表格分隔行一到就整段变表格、未闭合的 `**` 会把后面全部加粗 —— 每 80ms 重排一次，
+     * 用户看到的就是文字在跳。所以整行只有在换行符到达时才并入「稳定区」。
+     *
+     * 但最后一行仍然要走 Markdown 解析，不能直接当纯文本追加：否则 `$$...$$` 公式
+     * 闭合之后，`$$` 会以字面量露出来，得等到下一次换行才变成图片。
+     */
     private fun renderStreamingMarkdown(view: TextView, markdown: String) {
         val safe = Latex.forStreaming(markdown)
         val split = safe.lastIndexOf('\n')
@@ -1601,16 +1615,33 @@ class OverlayController(
 
         val builder = SpannableStringBuilder()
         if (stable.isNotBlank()) {
-            val rendered = stableRendered(stable)
-            if (rendered != null) builder.append(rendered) else builder.append(Preview.plain(stable))
+            builder.append(stableRendered(stable) ?: Preview.plain(stable))
         }
-        if (tail.isNotEmpty()) builder.append(tail)
+        if (tail.isNotEmpty()) {
+            builder.append(tailRendered(tail))
+        }
 
         if (builder.isEmpty()) {
             view.setText("正在等待回答…")
         } else {
             view.setText(builder)
         }
+    }
+
+    /**
+     * 最后一行：单独解析一遍，让公式/加粗在闭合的瞬间就生效。
+     * 只有一行，解析成本可控；超长单行（模型不换行）退回纯文本，避免每 80ms 重建大量公式位图。
+     */
+    private fun tailRendered(tail: String): CharSequence {
+        if (tail.length > MAX_TAIL_RENDER_LENGTH) return Preview.plain(tail)
+        if (tail == lastTailText) lastTailRendered?.let { return it }
+        val rendered = renderToSpanned(tail)
+        if (rendered != null) {
+            lastTailText = tail
+            lastTailRendered = rendered
+            return rendered
+        }
+        return Preview.plain(tail)
     }
 
     /** 完整行部分的 Markdown，前缀不变时复用上一次的结果 */
@@ -1675,5 +1706,8 @@ class OverlayController(
 
     private companion object {
         const val STREAM_RENDER_INTERVAL_MS = 80L
+
+        /** 最后一行超过这个长度就不再做 Markdown 解析，防止模型不换行时每 80ms 重建大量公式位图 */
+        const val MAX_TAIL_RENDER_LENGTH = 1000
     }
 }
