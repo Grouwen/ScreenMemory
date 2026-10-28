@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.util.Base64
 import android.util.Log
 import android.util.LruCache
+import com.screenmemory.app.util.AppStorage
 import java.io.File
 
 /**
@@ -14,13 +15,13 @@ import java.io.File
  * 之前只把 `hasImage` 这个布尔值写进历史，图片本体用完就扔，所以在历史记录里
  * 只能看到一个「· 图片」的字样，回看时根本不知道当时发的什么图。
  *
- * 现在发出的图片会落盘成 JPEG（`filesDir/chat_images/`），历史里只存文件名，
- * 既不撑大 `chat_history.json`，也能在回看时把图重新显示出来。
+ * 现在发出的图片会落盘成 JPEG（`Android/data/<包名>/files/chat_images/`），
+ * 历史里只存文件名，既不撑大 `chat_history.json`，也能在回看时把图重新显示出来。
+ * 放在外部私有目录，用户能直接看到、直接删。
  */
 object ChatImages {
 
     private const val TAG = "ChatImages"
-    private const val DIR = "chat_images"
 
     /** 历史里显示用的缩略图最长边；气泡只有 168dp 宽，512 足够，再大只是白烧内存 */
     private const val THUMB_MAX_PX = 512
@@ -34,7 +35,7 @@ object ChatImages {
         override fun sizeOf(key: String, value: Bitmap): Int = 1
     }
 
-    fun dir(context: Context): File = File(context.filesDir, DIR).apply { mkdirs() }
+    fun dir(context: Context): File = AppStorage.imageDir(context)
 
     /**
      * 把已经编码好的 base64 图片直接写盘，不做二次编码。

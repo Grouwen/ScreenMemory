@@ -2,6 +2,7 @@ package com.screenmemory.app.chat
 
 import android.content.Context
 import android.util.Log
+import com.screenmemory.app.util.AppStorage
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -52,8 +53,8 @@ class Conversation(val id: Long) {
 /**
  * 本地对话记录。
  *
- * 一段对话一条记录，整体存在 `filesDir/chat_history.json`，只保留最近
- * [MAX_CONVERSATIONS] 段、每段最多 [MAX_TURNS] 轮 —— 追问很容易几十轮，
+ * 一段对话一条记录，整体存在 `Android/data/<包名>/files/chat_history.json`，
+ * 只保留最近 [MAX_CONVERSATIONS] 段、每段最多 [MAX_TURNS] 轮 —— 追问很容易几十轮，
  * 不设上限的话文件和历史消息都会无限长。
  *
  * 写盘用「临时文件 + rename」，避免进程被杀时留下半截 JSON 导致历史全丢。
@@ -62,7 +63,7 @@ class ChatStore(context: Context) {
 
     companion object {
         private const val TAG = "ChatStore"
-        private const val FILE_NAME = "chat_history.json"
+        private const val FILE_NAME = AppStorage.HISTORY_FILE
 
         /** 最多留多少段对话 */
         const val MAX_CONVERSATIONS = 30
@@ -71,7 +72,7 @@ class ChatStore(context: Context) {
         const val MAX_TURNS = 20
     }
 
-    private val file = File(context.filesDir, FILE_NAME)
+    private val file = AppStorage.historyFile(context)
     private val appContext = context.applicationContext
 
     /** 全部历史，按时间倒序（最近的在最前面） */

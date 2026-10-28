@@ -47,6 +47,7 @@ import com.screenmemory.app.net.QwenVideoClient
 import com.screenmemory.app.overlay.OverlayController
 import com.screenmemory.app.speech.MathSpeech
 import com.screenmemory.app.speech.SpeechTranscriber
+import com.screenmemory.app.util.AppStorage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -115,7 +116,7 @@ class CaptureService : Service(), OverlayController.Listener {
     /** 本次助手运行期间云端转写出错后，锁定为本地识别；重新启动助手时恢复。 */
     private var cloudSpeechFailedForSession = false
 
-    /** 本地对话记录（filesDir/chat_history.json） */
+    /** 本地对话记录（Android/data/<包名>/files/chat_history.json） */
     private val chatStore by lazy { ChatStore(this) }
 
     /** 当前这段对话：面板冻结一次画面到关闭之间 */
@@ -877,7 +878,7 @@ class CaptureService : Service(), OverlayController.Listener {
     }
 
     private fun prepare(rec: ScreenRingRecorder, videoMode: Boolean): Prepared {
-        val dir = File(cacheDir, "clips").apply { mkdirs() }
+        val dir = AppStorage.clipCacheDir(this)
         pruneClips(dir, keep = 3)
         val baseName = "clip_${System.currentTimeMillis()}"
         val latestFile = File(dir, "$baseName.mp4")
@@ -950,8 +951,7 @@ class CaptureService : Service(), OverlayController.Listener {
         var saved: String? = null
         if (prefs.saveClip) {
             try {
-                val target = getExternalFilesDir(Environment.DIRECTORY_MOVIES)
-                    ?: File(filesDir, "clips").also { it.mkdirs() }
+                val target = AppStorage.savedClipDir(this)
                 for (part in parts) {
                     part.file.copyTo(File(target, part.file.name), overwrite = true)
                 }

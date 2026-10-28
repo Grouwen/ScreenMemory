@@ -30,6 +30,7 @@ import com.google.android.material.textfield.TextInputEditText
 import com.screenmemory.app.chat.ChatStore
 import com.screenmemory.app.chat.Conversation
 import com.screenmemory.app.service.CaptureService
+import com.screenmemory.app.util.AppStorage
 import com.screenmemory.app.util.Preview
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -119,6 +120,18 @@ class MainActivity : AppCompatActivity() {
         bindViews()
         loadSettings()
         bindActions()
+        showDataLocation()
+    }
+
+    /** 把数据目录显示在设置页底部，用户能照着路径找到并手动删除 */
+    private fun showDataLocation() {
+        findViewById<TextView>(R.id.tvPrivacyHint).text = buildString {
+            append("数据目录：")
+            append(AppStorage.visiblePath(this@MainActivity))
+            append("（对话历史、附过的图片、片段都在这里，可以随时删除）\n\n")
+            append("隐私提示：画面只在内存里循环覆盖，只有你点「发送」时才会抽帧或上传片段。")
+            append("录音/录屏都需要你本人授权，请勿用于未经他人同意的场景。")
+        }
     }
 
     private fun bindViews() {

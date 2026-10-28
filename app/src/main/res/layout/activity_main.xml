@@ -798,12 +798,13 @@
         </com.google.android.material.card.MaterialCardView>
 
         <TextView
+            android:id="@+id/tvPrivacyHint"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:layout_marginBottom="24dp"
             android:lineSpacingExtra="3dp"
-            android:text="隐私提示：画面只在内存里循环覆盖，只有你点「发送」时才会抽帧或上传片段；片段文件默认保存在应用私有目录，可随时删除。录音/录屏都需要你本人授权，请勿用于未经他人同意的场景。"
+            android:text="隐私提示：画面只在内存里循环覆盖，只有你点「发送」时才会抽帧或上传片段。录音/录屏都需要你本人授权，请勿用于未经他人同意的场景。"
             android:textSize="11sp" />
             </LinearLayout>
         </ScrollView>
