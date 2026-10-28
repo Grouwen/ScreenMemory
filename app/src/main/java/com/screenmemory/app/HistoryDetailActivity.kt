@@ -3,6 +3,7 @@ package com.screenmemory.app
 import android.os.Bundle
 import android.os.SystemClock
 import android.graphics.Bitmap
+import android.graphics.drawable.GradientDrawable
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
@@ -19,6 +20,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import com.screenmemory.app.chat.ChatImages
 import com.screenmemory.app.chat.ChatStore
 import com.screenmemory.app.chat.ChatTurn
 import com.screenmemory.app.chat.Conversation
@@ -218,7 +220,12 @@ class HistoryDetailActivity : AppCompatActivity() {
             addMessage("这段对话还没有内容。", isUser = false)
         } else {
             for (turn in conv.turns) {
-                addMessage(turn.question, isUser = true, hasImage = turn.hasImage)
+                addMessage(
+                    turn.question,
+                    isUser = true,
+                    hasImage = turn.hasImage,
+                    imagePath = turn.imagePath
+                )
                 addMessage(turn.answer, isUser = false, usage = turn.usage)
             }
         }
@@ -230,7 +237,8 @@ class HistoryDetailActivity : AppCompatActivity() {
         isUser: Boolean,
         streaming: Boolean = false,
         hasImage: Boolean = false,
-        usage: TokenUsage? = null
+        usage: TokenUsage? = null,
+        imagePath: String? = null
     ): TextView {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -299,6 +307,25 @@ class HistoryDetailActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
         )
+        // 这一轮附过的图片：从本地文件读缩略图贴在气泡上方
+        if (isUser) {
+            ChatImages.loadThumbnail(this, imagePath)?.let { bitmap ->
+                column.addView(
+                    ImageView(this).apply {
+                        scaleType = ImageView.ScaleType.CENTER_CROP
+                        setImageBitmap(bitmap)
+                        background = GradientDrawable().apply {
+                            cornerRadius = dp(12).toFloat()
+                            setColor(themeColor(com.google.android.material.R.attr.colorSurfaceVariant))
+                        }
+                        clipToOutline = true
+                    },
+                    LinearLayout.LayoutParams(dp(168), dp(126)).apply {
+                        bottomMargin = dp(4)
+                    }
+                )
+            }
+        }
         column.addView(
             bubble,
             LinearLayout.LayoutParams(
@@ -372,12 +399,23 @@ class HistoryDetailActivity : AppCompatActivity() {
         pendingImageBitmap = null
     }
 
+    /** 发送失败时把刚才清掉的图片放回来；用户已经重新选了图就不覆盖 */
+    private fun restoreImageAttachment(base64: String?) {
+        if (base64.isNullOrBlank() || pendingImageBase64 != null) return
+        val bitmap = ImagePayload.decode(base64) ?: return
+        pendingImageBase64 = base64
+        pendingImageBitmap = bitmap
+        imagePreview.setImageBitmap(bitmap)
+        imageRow.visibility = View.VISIBLE
+    }
+
     // ------------------------------------------------------------------ 继续追问
 
     private fun sendFollowUp() {
         val hasImage = pendingImageBase64 != null
-        // 记住原样输入：失败时回显的是这段，而不是把兜底文案（"请解释这张图片…"）塞回输入框
+        // 记住原样输入和原图：受理后马上清空，失败时原样回填
         val rawText = input.text?.toString().orEmpty()
+        val rawImage = pendingImageBase64
         val question = rawText.trim().ifEmpty {
             if (hasImage) "请解释这张图片里的重点内容" else ""
         }
@@ -389,15 +427,18 @@ class HistoryDetailActivity : AppCompatActivity() {
         sending = true
         send.isEnabled = false
         input.isEnabled = false
-        // 受理后立刻清空，不等回答返回
+        // 受理后立刻清空文字和图片，不等回答返回
         input.setText("")
+        clearImageAttachment()
+        // 图片落盘：这一轮的记录里要带着它，回看时才看得到当时发的什么图
+        val imageName = if (hasImage) ChatImages.save(this, rawImage.orEmpty()) else null
         followStatus.text = if (hasImage) {
             "追问中（正在让模型看图片）…"
         } else {
             "追问中（只依据上面的对话）…"
         }
         hideKeyboard()
-        addMessage(question, isUser = true, hasImage = hasImage)
+        addMessage(question, isUser = true, hasImage = hasImage, imagePath = imageName)
         pendingAnswerView = addMessage("", isUser = false, streaming = true)
         scrollDown()
 
@@ -456,12 +497,12 @@ class HistoryDetailActivity : AppCompatActivity() {
                         at = System.currentTimeMillis(),
                         withMedia = hasImage,
                         hasImage = hasImage,
+                        imagePath = imageName,
                         usage = answer.usage
                     )
                 )
                 withContext(Dispatchers.IO) { ChatStore(this@HistoryDetailActivity).save(conv) }
 
-                clearImageAttachment()
                 renderConversation()
                 followStatus.text = buildString {
                     append("已追问 · 现在是第 ${conv.turns.size} 轮")
@@ -472,8 +513,11 @@ class HistoryDetailActivity : AppCompatActivity() {
             } catch (t: Throwable) {
                 Log.e(TAG, "follow up failed", t)
                 followStatus.text = "追问失败：${t.message}"
-                // 失败的一轮不入库，把原来的问题回显到输入框方便重发
+                // 这一轮没入库，刚落盘的图片成了孤儿，删掉
+                ChatImages.delete(this@HistoryDetailActivity, imageName)
+                // 把原来的问题和图片回显，方便直接重发
                 input.setText(rawText)
+                restoreImageAttachment(rawImage)
                 renderConversation()
             } finally {
                 sending = false

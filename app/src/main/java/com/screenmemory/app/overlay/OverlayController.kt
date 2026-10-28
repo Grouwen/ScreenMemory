@@ -13,6 +13,7 @@ import android.graphics.Rect
 import android.util.Log
 import android.view.ContextThemeWrapper
 import com.screenmemory.app.R
+import com.screenmemory.app.chat.ChatImages
 import com.screenmemory.app.chat.ChatTurn
 import com.screenmemory.app.chat.TokenUsage
 import com.screenmemory.app.ui.MathSymbolBar
@@ -739,13 +740,26 @@ class OverlayController(
         Toast.makeText(context, "图片已附上", Toast.LENGTH_SHORT).show()
     }
 
-    /** 发送成功后由服务清掉附图；失败时保留，方便直接重试 */
+    /** 清掉附图（发送受理后立刻调用，不再等回答返回） */
     fun clearAttachment() {
         pendingImageBase64 = null
         attachmentImage?.setImageDrawable(null)
         attachmentRow?.visibility = View.GONE
         pendingImageBitmap?.recycle()
         pendingImageBitmap = null
+    }
+
+    /** 发送失败时把刚才清掉的附图放回来；用户已经重新选了图就不覆盖 */
+    fun restoreAttachment(base64: String?) {
+        if (base64.isNullOrBlank()) return
+        main.post {
+            if (pendingImageBase64 != null) return@post
+            val bitmap = ImagePayload.decode(base64) ?: return@post
+            pendingImageBase64 = base64
+            pendingImageBitmap = bitmap
+            attachmentImage?.setImageBitmap(bitmap)
+            attachmentRow?.visibility = View.VISIBLE
+        }
     }
 
     /** 面板销毁后清掉所有子视图引用，避免状态栏/答案写到一个已经不在窗口里的 View 上 */
@@ -1071,9 +1085,10 @@ class OverlayController(
             layoutParams = LinearLayout.LayoutParams(0, dp(46), 1f)
             setOnClickListener {
                 val text = inputView?.text?.toString().orEmpty()
-                // 受理后立刻清空：不要等模型答完再清，否则等待期间输入框一直挂着上一句
+                // 受理后立刻清空输入框和附图：不要等回答返回，否则等待期间一直挂着上一句/上一张
                 if (listener.onSend(text, pendingImageBase64)) {
                     inputView?.setText("")
+                    clearAttachment()
                 }
             }
         }
@@ -1152,11 +1167,13 @@ class OverlayController(
      * @param turns 已经完成的轮次
      * @param pendingQuestion 正在问的这一句；null 表示当前没有进行中的请求
      * @param pendingAnswer 流式过程中的半截答案
+     * @param pendingImagePath 当前这一问附的图片文件名（已落盘，来自 ChatImages）
      */
     fun setTranscript(
         turns: List<ChatTurn>,
         pendingQuestion: String? = null,
-        pendingAnswer: String? = null
+        pendingAnswer: String? = null,
+        pendingImagePath: String? = null
     ) {
         main.post {
             val messages = messageList ?: return@post
@@ -1195,7 +1212,8 @@ class OverlayController(
                     appendQuestion,
                     isUser = true,
                     turnNumber = pendingTurn,
-                    hasImage = pendingImageBase64 != null
+                    hasImage = pendingImagePath != null || pendingImageBase64 != null,
+                    imagePath = pendingImagePath
                 )
                 pendingAnswerView = addMessage(
                     pendingAnswer.orEmpty(),
@@ -1253,7 +1271,8 @@ class OverlayController(
                         turn.question,
                         isUser = true,
                         turnNumber = index + 1,
-                        hasImage = turn.hasImage
+                        hasImage = turn.hasImage,
+                        imagePath = turn.imagePath
                     )
                     addMessage(
                         turn.answer,
@@ -1268,7 +1287,8 @@ class OverlayController(
                         pendingQuestion,
                         isUser = true,
                         turnNumber = pendingTurn,
-                        hasImage = pendingImageBase64 != null
+                        hasImage = pendingImagePath != null || pendingImageBase64 != null,
+                        imagePath = pendingImagePath
                     )
                     pendingAnswerView = addMessage(
                         pendingAnswer.orEmpty(),
@@ -1340,7 +1360,8 @@ class OverlayController(
         streaming: Boolean = false,
         hasImage: Boolean = false,
         usage: TokenUsage? = null,
-        turnNumber: Int? = null
+        turnNumber: Int? = null,
+        imagePath: String? = null
     ): TextView {
         val messages = messageList ?: error("message list not initialized")
         val row = LinearLayout(context).apply {
@@ -1436,6 +1457,25 @@ class OverlayController(
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
         )
+        // 用户提问时附的图片：从落盘的文件里读缩略图贴回气泡上方
+        if (isUser) {
+            ChatImages.loadThumbnail(context, imagePath)?.let { bitmap ->
+                column.addView(
+                    ImageView(context).apply {
+                        scaleType = ImageView.ScaleType.CENTER_CROP
+                        setImageBitmap(bitmap)
+                        background = GradientDrawable().apply {
+                            cornerRadius = dp(10).toFloat()
+                            setColor(0xFFF2F3F7.toInt())
+                        }
+                        clipToOutline = true
+                    },
+                    LinearLayout.LayoutParams(dp(150), dp(112)).apply {
+                        bottomMargin = dp(4)
+                    }
+                )
+            }
+        }
         column.addView(
             bubble,
             LinearLayout.LayoutParams(

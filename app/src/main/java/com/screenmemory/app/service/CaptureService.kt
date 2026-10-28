@@ -37,6 +37,7 @@ import com.screenmemory.app.audio.UtteranceRecorder
 import com.screenmemory.app.capture.FrameExtractor
 import com.screenmemory.app.capture.MediaProbe
 import com.screenmemory.app.capture.ScreenRingRecorder
+import com.screenmemory.app.chat.ChatImages
 import com.screenmemory.app.chat.ChatStore
 import com.screenmemory.app.chat.ChatTurn
 import com.screenmemory.app.chat.Conversation
@@ -556,7 +557,10 @@ class CaptureService : Service(), OverlayController.Listener {
 
         asking = true
         overlay?.setBusy(true)
-        overlay?.setTranscript(history, question, "")
+        // 附图先落盘：这样"待回答"的气泡里就能立刻带出这张图，
+        // 历史记录也有了可以回显的文件（只存文件名，不塞进 JSON）
+        val imageName = if (hasImage) ChatImages.save(this, imageBase64.orEmpty()) else null
+        overlay?.setTranscript(history, question, "", pendingImagePath = imageName)
         scope.launch {
             try {
                 overlay?.setWarning("")
@@ -588,7 +592,12 @@ class CaptureService : Service(), OverlayController.Listener {
                     val now = SystemClock.uptimeMillis()
                     if (now - lastPush >= 120) {
                         lastPush = now
-                        overlay?.setTranscript(history, question, streamed.toString())
+                        overlay?.setTranscript(
+                            history,
+                            question,
+                            streamed.toString(),
+                            pendingImagePath = imageName
+                        )
                     }
                 }
 
@@ -693,11 +702,11 @@ class CaptureService : Service(), OverlayController.Listener {
                         at = System.currentTimeMillis(),
                         withMedia = firstTurn || hasImage,
                         hasImage = hasImage,
+                        imagePath = imageName,
                         usage = answer.usage
                     )
                 )
                 overlay?.setTranscript(conv.turns.toList(), null, null)
-                overlay?.clearAttachment()
 
                 logTiming(startedAt, preparedAt, firstTokenAt, prepared, history.size, firstTurn)
 
@@ -712,9 +721,12 @@ class CaptureService : Service(), OverlayController.Listener {
             } catch (t: Throwable) {
                 Log.e(TAG, "ask failed", t)
                 overlay?.setStatus("出错了：${t.message}")
-                // 失败的一轮不进历史；把问题回显到输入框，方便直接再发一次
+                // 这一轮没进历史，刚落盘的图片就是孤儿，删掉，别留垃圾文件
+                ChatImages.delete(this@CaptureService, imageName)
+                // 失败的一轮不进历史；把问题和图片回显，方便直接再发一次
                 overlay?.setTranscript(history, question, "")
                 overlay?.restoreInput(text)
+                overlay?.restoreAttachment(imageBase64)
             } finally {
                 asking = false
                 overlay?.setBusy(false)

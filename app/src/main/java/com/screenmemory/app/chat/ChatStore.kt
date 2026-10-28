@@ -33,8 +33,10 @@ data class ChatTurn(
     val at: Long,
     /** 这一轮是否附了画面（抽帧图片 / 直传视频）。首轮带，追问不带 */
     val withMedia: Boolean,
-    /** 这一轮是否附了用户上传/框选的图片（不把图片本体写进历史） */
+    /** 这一轮是否附了用户上传/框选的图片 */
     val hasImage: Boolean = false,
+    /** 图片在本地的文件名（在 filesDir/chat_images/ 下）；回看历史时用它把图读出来 */
+    val imagePath: String? = null,
     /** 服务端返回的 token 用量；旧记录或服务端未返回时为 null */
     val usage: TokenUsage? = null
 )
@@ -70,6 +72,7 @@ class ChatStore(context: Context) {
     }
 
     private val file = File(context.filesDir, FILE_NAME)
+    private val appContext = context.applicationContext
 
     /** 全部历史，按时间倒序（最近的在最前面） */
     fun loadAll(): List<Conversation> {
@@ -96,6 +99,7 @@ class ChatStore(context: Context) {
                             at = t.optLong("at", 0L),
                             withMedia = t.optBoolean("media", false),
                             hasImage = t.optBoolean("image", false),
+                            imagePath = t.optString("img").ifBlank { null },
                             usage = if (totalTokens > 0) {
                                 TokenUsage(promptTokens, completionTokens, totalTokens)
                             } else {
@@ -124,6 +128,7 @@ class ChatStore(context: Context) {
             all.add(copy)
             val trimmed = all.sortedByDescending { it.id }.take(MAX_CONVERSATIONS)
             writeAll(trimmed)
+            ChatImages.prune(appContext, imageNames(trimmed))
         } catch (t: Throwable) {
             Log.w(TAG, "保存历史失败", t)
         }
@@ -132,6 +137,7 @@ class ChatStore(context: Context) {
     fun clear() {
         try {
             if (file.exists()) file.delete()
+            ChatImages.prune(appContext, emptySet())
         } catch (t: Throwable) {
             Log.w(TAG, "清空历史失败", t)
         }
@@ -143,11 +149,23 @@ class ChatStore(context: Context) {
             val all = loadAll().toMutableList()
             if (!all.removeAll { it.id == id }) return false
             writeAll(all)
+            ChatImages.prune(appContext, imageNames(all))
             true
         } catch (t: Throwable) {
             Log.w(TAG, "删除历史失败", t)
             false
         }
+    }
+
+    /** 当前历史引用到的全部图片文件名；不在这个集合里的都算孤儿 */
+    private fun imageNames(list: List<Conversation>): Set<String> {
+        val names = HashSet<String>()
+        for (conv in list) {
+            for (turn in conv.turns) {
+                turn.imagePath?.takeIf { it.isNotBlank() }?.let { names.add(it) }
+            }
+        }
+        return names
     }
 
     /** @return 段数 to 轮数 */
@@ -167,6 +185,7 @@ class ChatStore(context: Context) {
                     .put("at", t.at)
                     .put("media", t.withMedia)
                     .put("image", t.hasImage)
+                    .put("img", t.imagePath.orEmpty())
                 t.usage?.let {
                     turnJson
                         .put("prompt_tokens", it.promptTokens)
