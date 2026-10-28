@@ -60,7 +60,11 @@ class OverlayController(
     interface Listener {
         fun onHoldStart()
         fun onHoldEnd()
-        fun onSend(text: String, imageBase64: String?)
+        /**
+         * @return true 表示这一问已经被受理（调用方可以清空输入框）；
+         *         false 表示没发出去（空消息、录制没就绪、正在回答），输入框要留着
+         */
+        fun onSend(text: String, imageBase64: String?): Boolean
         fun onStopService()
         fun pickImage()
 
@@ -1066,10 +1070,11 @@ class OverlayController(
             }
             layoutParams = LinearLayout.LayoutParams(0, dp(46), 1f)
             setOnClickListener {
-                listener.onSend(
-                    inputView?.text?.toString().orEmpty(),
-                    pendingImageBase64
-                )
+                val text = inputView?.text?.toString().orEmpty()
+                // 受理后立刻清空：不要等模型答完再清，否则等待期间输入框一直挂着上一句
+                if (listener.onSend(text, pendingImageBase64)) {
+                    inputView?.setText("")
+                }
             }
         }
         sendView = send
@@ -1130,9 +1135,15 @@ class OverlayController(
         main.post { inputView?.setText(text); inputView?.setSelection(text.length) }
     }
 
-    /** 发送成功后清空输入框；失败时保留原文，方便直接再点一次发送 */
-    fun clearInput() {
-        main.post { inputView?.setText("") }
+    /** 发送失败时把原问题回显到输入框；用户已经重新输入了内容就不覆盖 */
+    fun restoreInput(text: String) {
+        if (text.isBlank()) return
+        main.post {
+            val view = inputView ?: return@post
+            if (view.text?.toString().orEmpty().isNotBlank()) return@post
+            view.setText(text)
+            view.setSelection(text.length)
+        }
     }
 
     /**

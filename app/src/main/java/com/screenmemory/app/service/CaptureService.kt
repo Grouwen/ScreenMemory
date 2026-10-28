@@ -530,21 +530,21 @@ class CaptureService : Service(), OverlayController.Listener {
             prefs.asrKey().isNotBlank() &&
             prefs.asrEndpoint().isNotBlank()
 
-    override fun onSend(text: String, imageBase64: String?) {
+    override fun onSend(text: String, imageBase64: String?): Boolean {
         val hasImage = !imageBase64.isNullOrBlank()
         val question = text.trim().ifEmpty {
             if (hasImage) "请解释这张截图里的重点内容" else ""
         }
         if (question.isEmpty()) {
             overlay?.setStatus("先说点什么，或直接输入文字")
-            return
+            return false
         }
-        if (asking) return
+        if (asking) return false
         val videoMode = prefs.videoMode
         val rec = recorder
         if (rec == null || !ready) {
             overlay?.setStatus("录制还没准备好")
-            return
+            return false
         }
 
         // 面板冻结一次画面 = 一段对话。首轮附画面，之后都是追问
@@ -697,7 +697,6 @@ class CaptureService : Service(), OverlayController.Listener {
                     )
                 )
                 overlay?.setTranscript(conv.turns.toList(), null, null)
-                overlay?.clearInput()
                 overlay?.clearAttachment()
 
                 logTiming(startedAt, preparedAt, firstTokenAt, prepared, history.size, firstTurn)
@@ -713,13 +712,15 @@ class CaptureService : Service(), OverlayController.Listener {
             } catch (t: Throwable) {
                 Log.e(TAG, "ask failed", t)
                 overlay?.setStatus("出错了：${t.message}")
-                // 失败的一轮不进历史，但把问题留在面板上，方便再点一次发送
+                // 失败的一轮不进历史；把问题回显到输入框，方便直接再发一次
                 overlay?.setTranscript(history, question, "")
+                overlay?.restoreInput(text)
             } finally {
                 asking = false
                 overlay?.setBusy(false)
             }
         }
+        return true
     }
 
     override fun captureRegion(rect: Rect, onResult: (Bitmap?) -> Unit) {

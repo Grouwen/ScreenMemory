@@ -376,7 +376,9 @@ class HistoryDetailActivity : AppCompatActivity() {
 
     private fun sendFollowUp() {
         val hasImage = pendingImageBase64 != null
-        val question = input.text?.toString()?.trim().orEmpty().ifEmpty {
+        // 记住原样输入：失败时回显的是这段，而不是把兜底文案（"请解释这张图片…"）塞回输入框
+        val rawText = input.text?.toString().orEmpty()
+        val question = rawText.trim().ifEmpty {
             if (hasImage) "请解释这张图片里的重点内容" else ""
         }
         if (question.isEmpty()) {
@@ -387,6 +389,8 @@ class HistoryDetailActivity : AppCompatActivity() {
         sending = true
         send.isEnabled = false
         input.isEnabled = false
+        // 受理后立刻清空，不等回答返回
+        input.setText("")
         followStatus.text = if (hasImage) {
             "追问中（正在让模型看图片）…"
         } else {
@@ -457,7 +461,6 @@ class HistoryDetailActivity : AppCompatActivity() {
                 )
                 withContext(Dispatchers.IO) { ChatStore(this@HistoryDetailActivity).save(conv) }
 
-                input.setText("")
                 clearImageAttachment()
                 renderConversation()
                 followStatus.text = buildString {
@@ -469,8 +472,8 @@ class HistoryDetailActivity : AppCompatActivity() {
             } catch (t: Throwable) {
                 Log.e(TAG, "follow up failed", t)
                 followStatus.text = "追问失败：${t.message}"
-                // 失败的一轮不入库，把原文留在输入框里方便重发
-                input.setText(question)
+                // 失败的一轮不入库，把原来的问题回显到输入框方便重发
+                input.setText(rawText)
                 renderConversation()
             } finally {
                 sending = false
