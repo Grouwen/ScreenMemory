@@ -169,6 +169,28 @@ class ChatStore(context: Context) {
         return names
     }
 
+    /** 清掉所有附图，并把历史里的引用一起摘掉（文字保留） */
+    fun clearImages() {
+        try {
+            val all = loadAll()
+            var cleared = false
+            for (conv in all) {
+                for (index in conv.turns.indices) {
+                    val turn = conv.turns[index]
+                    if (turn.imagePath != null) {
+                        conv.turns[index] = turn.copy(imagePath = null)
+                        cleared = true
+                    }
+                }
+            }
+            // 引用摘干净了再重写，避免留下指向已删文件的记录
+            if (cleared) writeAll(all)
+            ChatImages.prune(appContext, emptySet())
+        } catch (t: Throwable) {
+            Log.w(TAG, "清理图片失败", t)
+        }
+    }
+
     /** @return 段数 to 轮数 */
     fun stats(): Pair<Int, Int> {
         val all = loadAll()

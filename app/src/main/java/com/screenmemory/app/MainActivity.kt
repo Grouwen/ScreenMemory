@@ -32,6 +32,7 @@ import com.screenmemory.app.chat.Conversation
 import com.screenmemory.app.service.CaptureService
 import com.screenmemory.app.util.AppStorage
 import com.screenmemory.app.util.Preview
+import com.screenmemory.app.util.StorageReport
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -45,13 +46,29 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnStart: MaterialButton
     private lateinit var btnStop: MaterialButton
 
-    // 顶部两个平级入口
+    // 顶部三个平级入口
     private lateinit var tabs: TabLayout
     private lateinit var mainPane: View
     private lateinit var historyPane: View
     private lateinit var historyList: LinearLayout
     private lateinit var tvHistoryCount: TextView
     private lateinit var tvClearHistory: TextView
+
+    private lateinit var cleanPane: View
+    private lateinit var tvUsageHistorySize: TextView
+    private lateinit var tvUsageHistoryDesc: TextView
+    private lateinit var tvUsageImagesSize: TextView
+    private lateinit var tvUsageImagesDesc: TextView
+    private lateinit var tvUsageClipsSize: TextView
+    private lateinit var tvUsageClipsDesc: TextView
+    private lateinit var tvUsageSavedSize: TextView
+    private lateinit var tvUsageSavedDesc: TextView
+    private lateinit var btnClearHistory: TextView
+    private lateinit var btnClearImages: TextView
+    private lateinit var btnClearClips: TextView
+    private lateinit var btnClearSaved: TextView
+    private lateinit var btnClearAll: TextView
+    private lateinit var tvDataPath: TextView
 
     private lateinit var etApiKey: TextInputEditText
     private lateinit var etChatBase: TextInputEditText
@@ -120,18 +137,6 @@ class MainActivity : AppCompatActivity() {
         bindViews()
         loadSettings()
         bindActions()
-        showDataLocation()
-    }
-
-    /** 把数据目录显示在设置页底部，用户能照着路径找到并手动删除 */
-    private fun showDataLocation() {
-        findViewById<TextView>(R.id.tvPrivacyHint).text = buildString {
-            append("数据目录：")
-            append(AppStorage.visiblePath(this@MainActivity))
-            append("（对话历史、附过的图片、片段都在这里，可以随时删除）\n\n")
-            append("隐私提示：画面只在内存里循环覆盖，只有你点「发送」时才会抽帧或上传片段。")
-            append("录音/录屏都需要你本人授权，请勿用于未经他人同意的场景。")
-        }
     }
 
     private fun bindViews() {
@@ -140,6 +145,21 @@ class MainActivity : AppCompatActivity() {
         tabs = findViewById(R.id.tabs)
         mainPane = findViewById(R.id.mainPane)
         historyPane = findViewById(R.id.historyPane)
+        cleanPane = findViewById(R.id.cleanPane)
+        tvUsageHistorySize = findViewById(R.id.tvUsageHistorySize)
+        tvUsageHistoryDesc = findViewById(R.id.tvUsageHistoryDesc)
+        tvUsageImagesSize = findViewById(R.id.tvUsageImagesSize)
+        tvUsageImagesDesc = findViewById(R.id.tvUsageImagesDesc)
+        tvUsageClipsSize = findViewById(R.id.tvUsageClipsSize)
+        tvUsageClipsDesc = findViewById(R.id.tvUsageClipsDesc)
+        tvUsageSavedSize = findViewById(R.id.tvUsageSavedSize)
+        tvUsageSavedDesc = findViewById(R.id.tvUsageSavedDesc)
+        btnClearHistory = findViewById(R.id.btnClearHistory)
+        btnClearImages = findViewById(R.id.btnClearImages)
+        btnClearClips = findViewById(R.id.btnClearClips)
+        btnClearSaved = findViewById(R.id.btnClearSaved)
+        btnClearAll = findViewById(R.id.btnClearAll)
+        tvDataPath = findViewById(R.id.tvDataPath)
         historyList = findViewById(R.id.historyList)
         tvHistoryCount = findViewById(R.id.tvHistoryCount)
         tvClearHistory = findViewById(R.id.tvClearHistory)
@@ -344,6 +364,7 @@ class MainActivity : AppCompatActivity() {
         }
         etVideoModel.doAfterTextChanged { updateAudioHint() }
         setupTabs()
+        bindCleanActions()
         btnStop.setOnClickListener {
             startService(CaptureService.stopIntent(this))
             Handler(Looper.getMainLooper()).postDelayed({ refreshStatus() }, 600)
@@ -516,25 +537,131 @@ class MainActivity : AppCompatActivity() {
         refreshHistory()
     }
 
-    // ------------------------------------------------------------------ 顶部两个平级入口
+    // ------------------------------------------------------------------ 顶部三个平级入口
 
     private fun setupTabs() {
         tabs.removeAllTabs()
         tabs.addTab(tabs.newTab().setText("主功能"))
         tabs.addTab(tabs.newTab().setText("对话历史"))
+        tabs.addTab(tabs.newTab().setText("清理"))
         tabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: TabLayout.Tab) {
-                val history = tab.position == 1
-                mainPane.visibility = if (history) View.GONE else View.VISIBLE
-                historyPane.visibility = if (history) View.VISIBLE else View.GONE
-                if (history) refreshHistory()
+                mainPane.visibility = if (tab.position == 0) View.VISIBLE else View.GONE
+                historyPane.visibility = if (tab.position == 1) View.VISIBLE else View.GONE
+                cleanPane.visibility = if (tab.position == 2) View.VISIBLE else View.GONE
+                when (tab.position) {
+                    1 -> refreshHistory()
+                    2 -> refreshCleanup()
+                }
             }
 
             override fun onTabUnselected(tab: TabLayout.Tab) = Unit
             override fun onTabReselected(tab: TabLayout.Tab) {
-                if (tab.position == 1) refreshHistory()
+                when (tab.position) {
+                    1 -> refreshHistory()
+                    2 -> refreshCleanup()
+                }
             }
         })
+    }
+
+    // ------------------------------------------------------------------ 清理页
+
+    /** 统计各类数据的占用，并把数量/大小刷到界面上 */
+    private fun refreshCleanup() {
+        val all = ChatStore(this).loadAll()
+        val turnCount = all.sumOf { it.turns.size }
+        val historyBytes = StorageReport.historyFile(this).bytes
+        tvUsageHistorySize.text = StorageReport.formatSize(historyBytes)
+        tvUsageHistoryDesc.text = "对话历史 · ${all.size} 段 $turnCount 轮"
+
+        val images = StorageReport.images(this)
+        tvUsageImagesSize.text = StorageReport.formatSize(images.bytes)
+        tvUsageImagesDesc.text = "对话里附过的图片 · ${images.count} 张"
+
+        val clips = StorageReport.tempClips(this)
+        tvUsageClipsSize.text = StorageReport.formatSize(clips.bytes)
+        tvUsageClipsDesc.text = "临时片段（发送时打包，可随时删） · ${clips.count} 个"
+
+        val saved = StorageReport.savedClips(this)
+        tvUsageSavedSize.text = StorageReport.formatSize(saved.bytes)
+        tvUsageSavedDesc.text = "另存的片段（你手动保存的录屏） · ${saved.count} 个"
+
+        // 空的行就别给点了，避免点了一顿什么都没有
+        btnClearHistory.isEnabled = all.isNotEmpty()
+        btnClearImages.isEnabled = images.count > 0
+        btnClearClips.isEnabled = clips.count > 0
+        btnClearSaved.isEnabled = saved.count > 0
+        btnClearHistory.alpha = if (all.isNotEmpty()) 1f else 0.35f
+        btnClearImages.alpha = if (images.count > 0) 1f else 0.35f
+        btnClearClips.alpha = if (clips.count > 0) 1f else 0.35f
+        btnClearSaved.alpha = if (saved.count > 0) 1f else 0.35f
+        val hasSomething = all.isNotEmpty() || images.count > 0 || clips.count > 0
+        btnClearAll.isEnabled = hasSomething
+        btnClearAll.alpha = if (hasSomething) 1f else 0.4f
+
+        val total = historyBytes + images.bytes + clips.bytes + saved.bytes
+        tvDataPath.text = buildString {
+            append("当前共占用 ")
+            append(StorageReport.formatSize(total))
+            append("\n\n数据目录：")
+            append(AppStorage.visiblePath(this@MainActivity))
+            append("\n对话历史、图片、片段都在这里，也可以直接到文件管理器里删。")
+        }
+    }
+
+    private fun bindCleanActions() {
+        btnClearHistory.setOnClickListener {
+            val count = ChatStore(this).loadAll().size
+            confirm("清空对话历史", "会删掉全部 $count 段对话记录，连同这些记录里附过的图片，无法恢复。") {
+                ChatStore(this).clear()
+                refreshCleanup()
+                refreshHistory()
+                toast("对话历史已清空")
+            }
+        }
+        btnClearImages.setOnClickListener {
+            confirm("清空对话图片", "会删掉所有对话里附过的图片，对话文字保留。") {
+                ChatStore(this).clearImages()
+                refreshCleanup()
+                refreshHistory()
+                toast("图片已清空")
+            }
+        }
+        btnClearClips.setOnClickListener {
+            StorageReport.clearDir(AppStorage.clipCacheDir(this))
+            refreshCleanup()
+            toast("临时片段已清理")
+        }
+        btnClearSaved.setOnClickListener {
+            confirm("清空另存片段", "这些是你手动保存的录屏，删掉就找不回来了。") {
+                StorageReport.clearDir(AppStorage.savedClipDir(this))
+                refreshCleanup()
+                toast("另存片段已清理")
+            }
+        }
+        btnClearAll.setOnClickListener {
+            confirm(
+                "全部清理",
+                "会删掉全部对话历史、对话图片和临时片段，无法恢复。\n" +
+                    "（手动另存的录屏不在此列，需要的话单独清理）"
+            ) {
+                ChatStore(this).clear()
+                StorageReport.clearDir(AppStorage.clipCacheDir(this))
+                refreshCleanup()
+                refreshHistory()
+                toast("已清理")
+            }
+        }
+    }
+
+    private fun confirm(title: String, message: String, action: () -> Unit) {
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("确定") { _, _ -> action() }
+            .show()
     }
 
     /** 历史列表：每段一张卡片，点进去看全文并可以继续追问 */
