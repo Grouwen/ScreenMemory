@@ -21,6 +21,13 @@ object Latex {
     private val parenMath = Regex("""\\\((.+?)\\\)""", RegexOption.DOT_MATCHES_ALL)
     private val inlineMath = Regex("(?<!\\$)\\$([^$\\n]+?)\\$(?!\\$)")
     private val cjk = Regex("[\\u4e00-\\u9fa5]")
+
+    /**
+     * `\text{...}` 里可以放任意文字（中文、标点、空格），本身的语义就是「公式里的文字」，
+     * 所以 `\text{高度差}` 或 `\text{某东西}` 即使含中文也应该视为公式体。
+     * 正向命中不受 cjk 过滤影响。
+     */
+    private val textCommandInner = Regex("""^(?:\s*\\text\{.+\}\s*)*$""")
     private val mathish = Regex("[\\\\^_{}=()+\\-*/<>|]")
     private val displayMath = Regex("""\$\$([\s\S]+?)\$\$""")
     private val incompleteCommand = Regex(
@@ -45,10 +52,12 @@ object Latex {
         if (!text.contains('$')) return text
         return inlineMath.replace(text) { match ->
             val body = match.groupValues[1]
-            val looksLikeMath = !cjk.containsMatchIn(body) && (
-                mathish.containsMatchIn(body) ||
-                    simpleVariableOrNumber.matches(body.trim())
+            val looksLikeMath = textCommandInner.containsMatchIn(body) || (
+                !cjk.containsMatchIn(body) && (
+                    mathish.containsMatchIn(body) ||
+                        simpleVariableOrNumber.matches(body.trim())
                 )
+            )
             if (looksLikeMath) "$$" + body + "$$" else match.value
         }
     }
