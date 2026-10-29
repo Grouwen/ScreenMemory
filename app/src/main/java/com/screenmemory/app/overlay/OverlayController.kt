@@ -1383,12 +1383,12 @@ class OverlayController(
             setPadding(dp(4), 0, dp(4), dp(2))
         }
         val maxBubbleWidth = minOf(metrics.widthPixels - dp(64), dp(420)).coerceAtLeast(dp(180))
-        val bubble = EditText(themedContext).apply {
+        // 用 TextView 而不是 EditText：气泡本来就是只读的，EditText 会获得焦点、
+        // 能被粘贴/输入法改写，用户能直接把 AI 的回答改掉。选择复制靠
+        // setTextIsSelectable + 长按的复制弹窗，不依赖可编辑性。
+        val bubble = TextView(themedContext).apply {
             maxWidth = maxBubbleWidth
             setTextIsSelectable(true)
-            isCursorVisible = false
-            setShowSoftInputOnFocus(false)
-            setSelectAllOnFocus(false)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
             setLineSpacing(dp(3).toFloat(), 1f)
             setPadding(dp(13), dp(9), dp(13), dp(9))
