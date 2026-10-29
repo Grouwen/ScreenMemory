@@ -70,4 +70,60 @@ class LatexTest {
         assertEquals(false, rendered.contains("\$\$"))
         assertEquals(true, rendered.contains("\\frac{1}{"))
     }
+
+    // ------------------------------------------------------------------
+    // 下面这些是线上实际漏渲染的例子，逐个固定住，避免以后再退化
+    // ------------------------------------------------------------------
+
+    @Test
+    fun convertsFactorial() {
+        assertEquals("\$\$k!\$\$", Latex.normalize("\$k!\$"))
+        assertEquals("\$\$n!\$\$", Latex.normalize("\$n!\$"))
+    }
+
+    @Test
+    fun convertsPrimeNotation() {
+        assertEquals("\$\$2y'\$\$", Latex.normalize("\$2y'\$"))
+        assertEquals("\$\$y''\$\$", Latex.normalize("\$y''\$"))
+        assertEquals("\$\$2yy'\$\$", Latex.normalize("\$2yy'\$"))
+    }
+
+    @Test
+    fun convertsVariableLists() {
+        assertEquals("\$\$x, y\$\$", Latex.normalize("\$x, y\$"))
+        assertEquals("\$\$x,y\$\$", Latex.normalize("\$x,y\$"))
+        assertEquals("\$\$x, y, y', y''\$\$", Latex.normalize("\$x, y, y', y''\$"))
+        assertEquals("\$\$a, b, c\$\$", Latex.normalize("\$a, b, c\$"))
+    }
+
+    @Test
+    fun convertsCoefficientTerms() {
+        assertEquals("\$\$3x\$\$", Latex.normalize("\$3x\$"))
+        assertEquals("\$\$2ab\$\$", Latex.normalize("\$2ab\$"))
+    }
+
+    @Test
+    fun convertsInTheMiddleOfSentences() {
+        assertEquals(
+            "\$\$k!\$\$ 约掉了分母里的 \$\$k!\$\$",
+            Latex.normalize("\$k!\$ 约掉了分母里的 \$k!\$")
+        )
+        assertEquals(
+            "这是一个复合求导，\$\$2y'\$\$。",
+            Latex.normalize("这是一个复合求导，\$2y'\$。")
+        )
+        assertEquals(
+            "随 \$\$x, y\$\$ 变化",
+            Latex.normalize("随 \$x, y\$ 变化")
+        )
+    }
+
+    @Test
+    fun stillRejectsCurrencyWithEnglishWords() {
+        // 放宽白名单时不能把英文货币误判成公式
+        val english = "costs \$5 and \$10"
+        assertEquals(english, Latex.normalize(english))
+        val chinese = "价格是 \$5 和 \$10"
+        assertEquals(chinese, Latex.normalize(chinese))
+    }
 }

@@ -28,7 +28,29 @@ object Latex {
      * 正向命中不受 cjk 过滤影响。
      */
     private val textCommandInner = Regex("""^(?:\s*\\text\{.+\}\s*)*$""")
-    private val mathish = Regex("[\\\\^_{}=()+\\-*/<>|]")
+
+    /**
+     * 出现这些字符基本可以断定是公式，而不是正文里的美元符号。
+     * `!`（阶乘）、`'`（导数撇号）和方括号都是模型高频输出、
+     * 但之前的白名单漏掉的，导致 `$k!$`、`$2y'$` 被原样吐出来。
+     */
+    private val mathish = Regex("[\\\\^_{}=()+\\-*/<>|!\\[\\]']")
+
+    /**
+     * `x`、`x, y`、`x y`、`a, b, c` 这类「变量列举」。
+     * 不含运算符，但肯定是公式：解题里经常写「随 $x, y$ 变化」。
+     * 限定首字符必须是字母，这样 `$5 and $10` 里被切出来的 "5 and " 仍然会被拒掉。
+     */
+    private val simpleVariableList = Regex(
+        """[A-Za-zα-ωΑ-Ω][\w']*(?:[\s,]+[A-Za-zα-ωΑ-Ω][\w']*)*"""
+    )
+
+    private val simpleNumber = Regex("""[-+]?(?:\d+(?:\.\d+)?|\.\d+)""")
+
+    /** `3x`、`2yy'` 这种「系数 + 变量」的单项式 */
+    private val simpleTerm = Regex(
+        """[-+]?(?:\d+(?:\.\d+)?|\.\d+)?[A-Za-zα-ωΑ-Ω][\w']*"""
+    )
     private val displayMath = Regex("""\$\$([\s\S]+?)\$\$""")
     private val incompleteCommand = Regex(
         """\\(?:frac|sqrt|text|mathrm|mathbf|mathit|left|right|begin|end)$"""
@@ -37,9 +59,6 @@ object Latex {
     private val rightCommand = Regex("""\\right(?![A-Za-z])""")
     private val beginCommand = Regex("""\\begin(?![A-Za-z])""")
     private val endCommand = Regex("""\\end(?![A-Za-z])""")
-    private val simpleVariableOrNumber = Regex(
-        """(?:[A-Za-zα-ωΑ-Ω][A-Za-z0-9_']*|[-+]?(?:\d+(?:\.\d+)?|\.\d+))"""
-    )
 
     fun normalize(markdown: String): String {
         var text = markdown
@@ -52,12 +71,15 @@ object Latex {
         if (!text.contains('$')) return text
         return inlineMath.replace(text) { match ->
             val body = match.groupValues[1]
+            val trimmed = body.trim()
             val looksLikeMath = textCommandInner.containsMatchIn(body) || (
                 !cjk.containsMatchIn(body) && (
                     mathish.containsMatchIn(body) ||
-                        simpleVariableOrNumber.matches(body.trim())
+                        simpleVariableList.matches(trimmed) ||
+                        simpleTerm.matches(trimmed) ||
+                        simpleNumber.matches(trimmed)
+                    )
                 )
-            )
             if (looksLikeMath) "$$" + body + "$$" else match.value
         }
     }
