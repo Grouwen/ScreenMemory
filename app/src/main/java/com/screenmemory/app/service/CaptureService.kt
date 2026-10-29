@@ -566,9 +566,8 @@ class CaptureService : Service(), OverlayController.Listener {
             try {
                 overlay?.setWarning("")
 
-                // 首轮就打包画面。带截图也照常发：视频和截图一起给模型，
-// 让他把「学生指认的那一处」和「录像里的上下文」对上。
-val prepared: Prepared? = if (firstTurn) {
+                // 首轮打包画面；带截图时也照常打包，视频和截图一起发给模型
+                val prepared: Prepared? = if (firstTurn) {
                     overlay?.setStatus(
                         if (rec.isFrozen()) "正在打包「点按钮那一刻」之前的 ${prefs.clipSeconds} 秒…"
                         else "正在打包最近 ${prefs.clipSeconds} 秒…"
@@ -618,9 +617,7 @@ val prepared: Prepared? = if (firstTurn) {
                         )
                     }
                     overlay?.setWarning(warnings.joinToString("\n\n"))
-                    if (hasImage && prepared != null) {
-                        overlay?.setStatus("已附图，正在上传视频…")
-                    } else if (hasImage) {
+                    if (hasImage) {
                         overlay?.setStatus("已附图，正在让模型看截图…")
                     } else if (prepared == null) {
                         overlay?.setStatus("追问中（沿用上一轮的画面）…")
@@ -630,8 +627,6 @@ val prepared: Prepared? = if (firstTurn) {
                             question = question,
                             video = prepared?.file,
                             systemPrompt = when {
-                                hasImage && prepared != null ->
-                                    videoWithImagePrompt(prepared.hasAudio, hearsAudio)
                                 hasImage -> imageSystemPrompt()
                                 prepared == null -> videoFollowUpPrompt()
                                 else -> videoPrompt(prepared.hasAudio, hearsAudio)
@@ -643,12 +638,9 @@ val prepared: Prepared? = if (firstTurn) {
                         )
                     }
                     summary = when {
-                        hasImage && prepared != null -> buildString {
-                            append("已发送 · 视频 ${prepared.durationMs / 1000} 秒 + 1 张截图")
-                            if (prepared.rotationTrimmed) append("（单方向）")
-                        }
                         hasImage && prepared == null ->
                             "已发送 · 附带 1 张截图 · 第 ${history.size + 1} 轮"
+                        hasImage -> "已发送 · 视频 + 1 张截图"
                         prepared == null ->
                             "已追问 · 第 ${history.size + 1} 轮（画面沿用上一轮）"
                         else -> buildString {
@@ -661,9 +653,7 @@ val prepared: Prepared? = if (firstTurn) {
                         }
                     }
                 } else {
-                    if (hasImage && prepared != null) {
-                        overlay?.setStatus("已附图，正在发送截图 + ${prepared.frames.size} 帧画面…")
-                    } else if (hasImage) {
+                    if (hasImage) {
                         overlay?.setStatus("已附图，正在让模型看截图…")
                     } else if (prepared == null) {
                         overlay?.setStatus("追问中（沿用上一轮的画面）…")
@@ -671,7 +661,6 @@ val prepared: Prepared? = if (firstTurn) {
                         overlay?.setStatus("已发送 ${prepared.frames.size} 帧画面，等模型回答…")
                     }
                     val images = buildList {
-                        // 学生框选的截图放第一张：提示词里就是按「第一张是截图」写的
                         if (hasImage) add(imageBase64!!)
                         addAll(prepared?.frames.orEmpty())
                     }
@@ -679,11 +668,12 @@ val prepared: Prepared? = if (firstTurn) {
                         llm.ask(
                             question = question,
                             jpegBase64 = images,
-                            systemPrompt = when {
-                                hasImage && prepared != null -> imageWithFramesPrompt(prepared.frames.size)
-                                hasImage -> imageSystemPrompt()
-                                prepared == null -> followUpSystemPrompt()
-                                else -> systemPrompt()
+                            systemPrompt = if (hasImage) {
+                                imageSystemPrompt()
+                            } else if (prepared == null) {
+                                followUpSystemPrompt()
+                            } else {
+                                systemPrompt()
                             },
                             onDelta = onDelta,
                             history = history
@@ -1099,57 +1089,21 @@ val prepared: Prepared? = if (firstTurn) {
     """.trimIndent()
 
     private fun videoPrompt(hasAudio: Boolean, hearsAudio: Boolean): String {
+        val audioHint = when {
+            !hasAudio ->
+                "这段录像没有声音轨，你听不到老师的讲解，只能看板书。不要臆测老师说了什么。"
+            hearsAudio ->
+                "这段录像带声音轨，里面是老师的讲解。请把「老师说的推导思路」和「屏幕上的板书」结合起来判断他讲到哪一步、为什么这么推。"
+            else ->
+                "这段录像带声音轨，但当前模型无法解析音频，你只能看板书。不要臆测老师说了什么。"
+        }
         return """
             你是一位坐在学生旁边的数学网课助教。学生正在看一节数学网课，卡住了就会截取最近 ${prefs.clipSeconds} 秒的录像来问你（mp4，画面是老师的板书 / 公式推导 / PPT）。你可以从连续画面里看出老师正在写什么、讲到哪一步。
 
-            ${audioHint(hasAudio, hearsAudio)}
+            $audioHint
 
             $mathRules
         """.trimIndent()
-    }
-
-    /**
-     * 视频 + 截图同时发送。
-     *
-     * 两者信息是重叠的：截图就是视频里学生指认的那一处。所以提示词的重点不是
-     * 「都看一下」，而是让他把截图对到视频里的位置，避免答成两段互不相干的内容。
-     */
-    private fun videoWithImagePrompt(hasAudio: Boolean, hearsAudio: Boolean): String {
-        return """
-            你是一位坐在学生旁边的数学网课助教。学生这次同时给了你两样东西：
-            1. 一段最近 ${prefs.clipSeconds} 秒的网课录像（mp4，老师的板书 / 公式推导 / PPT）；
-            2. 一张他自己框选或上传的截图，那通常是他卡住、想让你重点讲的地方。
-
-            这张截图本来就取自这段录像，两者是同一处内容。请先在录像里找到截图对应的位置，确认老师讲到哪一步，再回答问题；不要把它们当成两道不同的题。
-
-            ${audioHint(hasAudio, hearsAudio)}
-
-            如果截图和录像对不上（比如截图来自别处），以截图为准，并说明你的判断。
-
-            $mathRules
-        """.trimIndent()
-    }
-
-    /** 抽帧 + 截图同时发送：所有图走同一个图集，靠顺序和提示词区分 */
-    private fun imageWithFramesPrompt(frameCount: Int): String {
-        return """
-            你是一位数学网课助教。学生发来了一组图片：
-            - 第 1 张是他自己框选或上传的截图，是他重点关注的地方；
-            - 后面 $frameCount 张是从最近 ${prefs.clipSeconds} 秒录屏里按时间顺序抽出的画面。
-
-            请先看第 1 张截图，再结合后面的连续画面理解上下文（老师讲到哪一步、前后推导是什么），然后回答问题。截图与后面的帧对不上时，以截图为准并说明你的判断。
-
-            $mathRules
-        """.trimIndent()
-    }
-
-    private fun audioHint(hasAudio: Boolean, hearsAudio: Boolean): String = when {
-        !hasAudio ->
-            "这段录像没有声音轨，你听不到老师的讲解，只能看板书。不要臆测老师说了什么。"
-        hearsAudio ->
-            "这段录像带声音轨，里面是老师的讲解。请把「老师说的推导思路」和「屏幕上的板书」结合起来判断他讲到哪一步、为什么这么推。"
-        else ->
-            "这段录像带声音轨，但当前模型无法解析音频，你只能看板书。不要臆测老师说了什么。"
     }
 
     // ------------------------------------------------------------------ 停止

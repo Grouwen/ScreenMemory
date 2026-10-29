@@ -141,7 +141,7 @@ class QwenVideoClient(private val prefs: Prefs) {
 
         if (ossUrl != null) {
             sentVia = "oss"
-            onStatus(if (useImage) "模型正在看这段视频和截图…" else "模型正在看这段视频…")
+            onStatus("模型正在看这段视频…")
             try {
                 val answer = chat(
                     key, ossUrl, question, systemPrompt, history, forward, imageBase64
@@ -367,10 +367,6 @@ class QwenVideoClient(private val prefs: Prefs) {
         includeUsage: Boolean
     ): ModelAnswer {
         val intro = when {
-            // 视频 + 截图一起发：两者是同一处内容，明确要求先对齐再回答
-            imageBase64 != null && videoUrl != null ->
-                question + "\n\n（本次同时附了一段视频和一张用户框选的截图。截图取自这段视频，是他重点关注的部分：" +
-                    "请先在视频里找到对应位置，再结合两者的上下文回答，不要把截图当成另一道题）"
             imageBase64 != null && videoUrl == null && history.isNotEmpty() ->
                 question + "\n\n（这是追问，另外附了一张用户框选的截图，请优先参考这张图，上一轮画面仍可参考）"
             imageBase64 != null ->
