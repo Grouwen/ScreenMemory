@@ -82,6 +82,16 @@ class Prefs(context: Context) {
         get() = sp.getInt("frame_count", 8).coerceIn(1, 20)
         set(value) = sp.edit().putInt("frame_count", value.coerceIn(1, 20)).apply()
 
+    /**
+     * 悬浮窗发送时是否附带录屏画面（视频直传的 mp4 或抽帧后的关键帧）。
+     *
+     * 关掉以后只发文字或用户自己选的图片，不打包、不上传画面：
+     * 省流量、首字更快，也适合「我已经截图了，不需要再看录屏」的场景。
+     */
+    var attachVideo: Boolean
+        get() = sp.getBoolean("attach_video", true)
+        set(value) = sp.edit().putBoolean("attach_video", value).apply()
+
     /** 画质档位：0 省流 / 1 标准 / 2 清晰 / 3 极低（编号保持不变以兼容旧配置） */
     var qualityProfile: Int
         get() = sp.getInt("quality_profile", QualityProfile.DEFAULT_INDEX)

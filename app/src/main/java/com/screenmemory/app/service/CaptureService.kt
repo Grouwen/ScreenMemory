@@ -543,6 +543,8 @@ class CaptureService : Service(), OverlayController.Listener {
         }
         if (asking) return false
         val videoMode = prefs.videoMode
+        // 悬浮窗上的「带视频」开关：关掉后不打包、不上传画面，只发文字和用户选的图片
+        val attachVideo = prefs.attachVideo
         val rec = recorder
         if (rec == null || !ready) {
             overlay?.setStatus("录制还没准备好")
@@ -566,8 +568,9 @@ class CaptureService : Service(), OverlayController.Listener {
             try {
                 overlay?.setWarning("")
 
-                // 首轮打包画面；带截图时也照常打包，视频和截图一起发给模型
-                val prepared: Prepared? = if (firstTurn) {
+                // 首轮打包画面；带截图时也照常打包，视频和截图一起发给模型。
+                // 「带视频」关闭后跳过打包，这一轮只发文字 / 图片
+                val prepared: Prepared? = if (firstTurn && attachVideo) {
                     overlay?.setStatus(
                         if (rec.isFrozen()) "正在打包「点按钮那一刻」之前的 ${prefs.clipSeconds} 秒…"
                         else "正在打包最近 ${prefs.clipSeconds} 秒…"
@@ -619,6 +622,8 @@ class CaptureService : Service(), OverlayController.Listener {
                     overlay?.setWarning(warnings.joinToString("\n\n"))
                     if (hasImage) {
                         overlay?.setStatus("已附图，正在让模型看截图…")
+                    } else if (!attachVideo) {
+                        overlay?.setStatus("正在提问…")
                     } else if (prepared == null) {
                         overlay?.setStatus("追问中（沿用上一轮的画面）…")
                     }
@@ -627,6 +632,7 @@ class CaptureService : Service(), OverlayController.Listener {
                             question = question,
                             video = prepared?.file,
                             systemPrompt = when {
+                                !attachVideo -> textOnlyPrompt()
                                 hasImage -> imageSystemPrompt()
                                 prepared == null -> videoFollowUpPrompt()
                                 else -> videoPrompt(prepared.hasAudio, hearsAudio)
@@ -634,13 +640,15 @@ class CaptureService : Service(), OverlayController.Listener {
                             onStatus = { status -> overlay?.setStatus(status) },
                             onDelta = onDelta,
                             history = history,
-                            imageBase64 = imageBase64
+                            imageBase64 = imageBase64,
+                            allowTextOnly = !attachVideo
                         )
                     }
                     summary = when {
                         hasImage && prepared == null ->
                             "已发送 · 附带 1 张截图 · 第 ${history.size + 1} 轮"
                         hasImage -> "已发送 · 视频 + 1 张截图"
+                        !attachVideo -> "已发送 · 仅文字 · 第 ${history.size + 1} 轮"
                         prepared == null ->
                             "已追问 · 第 ${history.size + 1} 轮（画面沿用上一轮）"
                         else -> buildString {
@@ -655,6 +663,8 @@ class CaptureService : Service(), OverlayController.Listener {
                 } else {
                     if (hasImage) {
                         overlay?.setStatus("已附图，正在让模型看截图…")
+                    } else if (!attachVideo) {
+                        overlay?.setStatus("正在提问…")
                     } else if (prepared == null) {
                         overlay?.setStatus("追问中（沿用上一轮的画面）…")
                     } else {
@@ -668,7 +678,9 @@ class CaptureService : Service(), OverlayController.Listener {
                         llm.ask(
                             question = question,
                             jpegBase64 = images,
-                            systemPrompt = if (hasImage) {
+                            systemPrompt = if (!attachVideo) {
+                                textOnlyPrompt()
+                            } else if (hasImage) {
                                 imageSystemPrompt()
                             } else if (prepared == null) {
                                 followUpSystemPrompt()
@@ -684,6 +696,7 @@ class CaptureService : Service(), OverlayController.Listener {
                             "已发送 · 附带 1 张截图 · 第 ${history.size + 1} 轮"
                         hasImage && prepared != null ->
                             "已发送 · 截图 + ${prepared.frames.size} 帧画面"
+                        !attachVideo -> "已发送 · 仅文字 · 第 ${history.size + 1} 轮"
                         prepared == null ->
                             "已追问 · 第 ${history.size + 1} 轮（画面沿用上一轮）"
                         else -> buildString {
@@ -701,7 +714,7 @@ class CaptureService : Service(), OverlayController.Listener {
                         question = question,
                         answer = answer.text.ifBlank { "模型没有返回内容" },
                         at = System.currentTimeMillis(),
-                        withMedia = firstTurn || hasImage,
+                        withMedia = (firstTurn && attachVideo) || hasImage,
                         hasImage = hasImage,
                         imagePath = imageName,
                         usage = answer.usage
@@ -1067,6 +1080,10 @@ class CaptureService : Service(), OverlayController.Listener {
 
         $mathRules
     """.trimIndent()
+
+    /** 悬浮窗「带视频」关掉时用：只发文字或图片，不再有录屏上下文 */
+    private fun textOnlyPrompt(): String =
+        "你是一个专业的数学老师助教，学生可以向你提问"
 
     /** 追问用的系统提示：这一轮不再附图，画面沿用上一轮 */
     private fun followUpSystemPrompt(): String = """

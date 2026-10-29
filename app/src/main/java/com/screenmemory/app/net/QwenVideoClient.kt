@@ -80,13 +80,25 @@ class QwenVideoClient(private val prefs: Prefs) {
         onStatus: (String) -> Unit,
         onDelta: (String) -> Unit = {},
         history: List<ChatTurn> = emptyList(),
-        imageBase64: String? = null
+        imageBase64: String? = null,
+        /**
+         * 允许「没有画面」的纯文字提问。
+         *
+         * 悬浮窗关掉「带视频」后，用户可以只打字提问，这时候没有任何媒体可发，
+         * 不能再按「没有可发送的画面」拒掉。
+         */
+        allowTextOnly: Boolean = false
     ): ModelAnswer {
         val key = prefs.qwenKey().trim()
         if (key.isEmpty()) throw IOException("请先填写百炼（DashScope）API Key")
         val useVideo = video != null && video.exists() && video.length() > 0L
         val useImage = !imageBase64.isNullOrBlank()
-        if (!useVideo && !useImage && history.isEmpty()) throw IOException("没有可发送的画面")
+        if (!useVideo && !useImage && history.isEmpty() && !allowTextOnly) {
+            throw IOException("没有可发送的画面")
+        }
+        if (allowTextOnly && !useVideo && !useImage && question.isBlank() && history.isEmpty()) {
+            throw IOException("请输入问题")
+        }
         val model = prefs.qwenModel()
 
         // 已经开始吐字了就不能再降级重试，否则用户会看到两份答案
@@ -121,10 +133,17 @@ class QwenVideoClient(private val prefs: Prefs) {
 
         // 追问或只附图：只带文字历史，不重新上传视频
         if (!useVideo || video == null) {
-            onStatus(if (useImage) "模型正在看截图…" else "追问中（沿用上一轮的画面）…")
+            onStatus(
+                when {
+                    useImage -> "模型正在看截图…"
+                    history.isNotEmpty() -> "追问中（沿用上一轮的画面）…"
+                    else -> "正在提问…"
+                }
+            )
             sentVia = if (useImage) "image" else "text"
             val answer = chat(
-                key, null, question, systemPrompt, history, forward, imageBase64
+                key, null, question, systemPrompt, history, forward, imageBase64,
+                textOnly = allowTextOnly
             )
             reportPhases()
             return answer
@@ -303,7 +322,8 @@ class QwenVideoClient(private val prefs: Prefs) {
         systemPrompt: String,
         history: List<ChatTurn>,
         onDelta: (String) -> Unit,
-        imageBase64: String? = null
+        imageBase64: String? = null,
+        textOnly: Boolean = false
     ): ModelAnswer {
         val thinking = prefs.enableThinking()
         return try {
@@ -311,7 +331,8 @@ class QwenVideoClient(private val prefs: Prefs) {
                 key, videoUrl, question, systemPrompt, history, onDelta,
                 imageBase64 = imageBase64,
                 thinking = thinking,
-                includeUsage = true
+                includeUsage = true,
+                textOnly = textOnly
             )
         } catch (t: Throwable) {
             if (t.message?.contains("HTTP 400") != true) throw t
@@ -325,7 +346,8 @@ class QwenVideoClient(private val prefs: Prefs) {
                         key, videoUrl, question, systemPrompt, history, onDelta,
                         imageBase64 = imageBase64,
                         thinking = null,
-                        includeUsage = true
+                        includeUsage = true,
+                        textOnly = textOnly
                     )
                 } catch (thinkingError: Throwable) {
                     if (thinkingError.message?.contains("HTTP 400") != true) {
@@ -337,7 +359,8 @@ class QwenVideoClient(private val prefs: Prefs) {
                         key, videoUrl, question, systemPrompt, history, onDelta,
                         imageBase64 = imageBase64,
                         thinking = thinking,
-                        includeUsage = false
+                        includeUsage = false,
+                        textOnly = textOnly
                     )
                 } catch (usageError: Throwable) {
                     if (usageError.message?.contains("HTTP 400") != true) {
@@ -350,7 +373,8 @@ class QwenVideoClient(private val prefs: Prefs) {
                 key, videoUrl, question, systemPrompt, history, onDelta,
                 imageBase64 = imageBase64,
                 thinking = null,
-                includeUsage = false
+                includeUsage = false,
+                textOnly = textOnly
             )
         }
     }
@@ -364,9 +388,13 @@ class QwenVideoClient(private val prefs: Prefs) {
         onDelta: (String) -> Unit,
         imageBase64: String?,
         thinking: Boolean?,
-        includeUsage: Boolean
+        includeUsage: Boolean,
+        textOnly: Boolean = false
     ): ModelAnswer {
         val intro = when {
+            // 关掉「带视频」时没有任何录屏上下文，凡提到「上一轮画面」的说法都不成立，
+            // 所以不加后缀，原样把用户的话发过去
+            textOnly -> question
             imageBase64 != null && videoUrl == null && history.isNotEmpty() ->
                 question + "\n\n（这是追问，另外附了一张用户框选的截图，请优先参考这张图，上一轮画面仍可参考）"
             imageBase64 != null ->

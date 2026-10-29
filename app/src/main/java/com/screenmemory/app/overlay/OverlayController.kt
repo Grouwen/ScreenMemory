@@ -12,6 +12,7 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.util.Log
 import android.view.ContextThemeWrapper
+import com.screenmemory.app.Prefs
 import com.screenmemory.app.R
 import com.screenmemory.app.chat.ChatImages
 import com.screenmemory.app.chat.ChatTurn
@@ -104,6 +105,9 @@ class OverlayController(
     private var attachmentImage: ImageView? = null
     private var mathBar: MathSymbolBar? = null
     private var mathToggle: TextView? = null
+    private var videoToggle: TextView? = null
+    /** 是否携带录屏画面；去重前后都以这个值为准，和 Prefs 同步 */
+    private var attachVideo = true
     private var holdView: TextView? = null
     private var sendView: TextView? = null
     private var headerSubtitle: TextView? = null
@@ -534,6 +538,20 @@ class OverlayController(
         mathToggle?.apply {
             text = if (show) "∑ 收起" else "∑ 符号"
             contentDescription = if (show) "收起数学符号栏" else "展开数学符号栏"
+        }
+    }
+
+    /** 开：蓝底白字点亮的「带视频」；关：灰底灰字的「不带视频」 */
+    private fun renderVideoToggle() {
+        videoToggle?.apply {
+            text = if (attachVideo) "带视频" else "不带视频"
+            setTextColor(if (attachVideo) 0xFF2F6BFF.toInt() else 0xFF8A8F9C.toInt())
+            background = GradientDrawable().apply {
+                cornerRadius = dp(9).toFloat()
+                setColor(if (attachVideo) 0xFFE8EFFF.toInt() else 0xFFF2F3F7.toInt())
+            }
+            contentDescription =
+                if (attachVideo) "当前会附带录屏画面，点击改为不附带" else "当前只发文字和图片，点击改为附带录屏画面"
         }
     }
 
@@ -1009,6 +1027,27 @@ class OverlayController(
             setOnClickListener { toggleMathBar() }
         }
         mathToggle = toggle
+        // 是否附带录屏画面。关掉后只发文字 / 用户自己选的图片
+        val videoBtn = TextView(context).apply {
+            gravity = Gravity.CENTER
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            setPadding(dp(10), dp(3), dp(10), dp(3))
+            setOnClickListener {
+                attachVideo = !attachVideo
+                Prefs(context).attachVideo = attachVideo
+                renderVideoToggle()
+            }
+        }
+        videoToggle = videoBtn
+        attachVideo = Prefs(context).attachVideo
+        renderVideoToggle()
+        mathToggleRow.addView(
+            videoBtn,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { rightMargin = dp(6) }
+        )
         mathToggleRow.addView(
             TextView(context).apply {
                 text = "图片"
