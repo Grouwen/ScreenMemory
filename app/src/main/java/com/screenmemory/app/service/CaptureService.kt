@@ -1035,7 +1035,7 @@ class CaptureService : Service(), OverlayController.Listener {
             "也可能那段时间确实没有声音在播放。"
     }
 
-    /** 数学网课助教的答题规范，四套提示词共用 */
+    /** 专业的数学老师助教的答题规范，四套提示词共用 */
 //    private val mathRules = """
 //        回答请遵守这些规则：
 //        1. 先说清「老师现在讲到哪一步」，再解释这一步；
@@ -1048,13 +1048,11 @@ class CaptureService : Service(), OverlayController.Listener {
 //        排版用 Markdown（列表、加粗即可），不要输出 HTML 标签，不要用 +---+ 这种 ASCII 线框画表格。
 //    """.trimIndent()
     private val mathRules = """
-        你是一个专业的数学老师助教，请根据视频回答用户的提问
-
         注意：排版用 Markdown（列表、加粗即可），不要输出 HTML 标签，不要用 +---+ 这种 ASCII 线框画表格。
     """.trimIndent()
 
     private fun systemPrompt(): String = """
-        你是一位坐在学生旁边的数学网课助教。学生正在看一节数学网课（屏幕上通常是老师的板书、公式推导、PPT 或例题），卡住了就会截取最近 ${prefs.clipSeconds} 秒的画面来问你。
+        你是一位坐在学生旁边的专业的数学老师助教。学生正在看一节数学网课（屏幕上通常是老师的板书、公式推导、PPT 或例题），卡住了就会截取最近 ${prefs.clipSeconds} 秒的画面来问你。
 
         下面附带的就是这 ${prefs.clipSeconds} 秒的屏幕截图，按时间先后排列，最后一张最接近提问的那一刻。你能从连续几帧里看出老师正在写什么、讲到哪一行。
 
@@ -1063,7 +1061,7 @@ class CaptureService : Service(), OverlayController.Listener {
 
     /** 用户自己上传 / 框选的单张图片 */
     private fun imageSystemPrompt(): String = """
-        你是一位数学网课助教。学生上传了一张图片（可能是题目、板书、公式推导或屏幕截图），并据此提问。
+        你是一位专业的数学老师助教。学生上传了一张图片（可能是题目、板书、公式推导或屏幕截图），并据此提问。
 
         请优先依据这张图片回答；如果图片里的信息不足，再结合上文。图片不清晰或关键步骤被截掉时，直接说明需要重新上传更完整的图片，不要凭空猜测。
 
@@ -1072,7 +1070,7 @@ class CaptureService : Service(), OverlayController.Listener {
 
     /** 追问用的系统提示：这一轮不再附图，画面沿用上一轮 */
     private fun followUpSystemPrompt(): String = """
-        你是一位数学网课助教。学生在追问——这一轮不会再附新截图，画面和你上一轮看到的是同一批（最近 ${prefs.clipSeconds} 秒的网课屏幕）。
+        你是一位专业的数学老师助教。学生在追问——这一轮不会再附新截图，画面和你上一轮看到的是同一批（最近 ${prefs.clipSeconds} 秒的网课屏幕）。
 
         请围绕上文你已经看到的板书继续解释。如果这个话题确实需要重新看画面（比如学生问「新出现的那个符号是啥」），直接说明需要重新截图提问，不要凭空猜测。
 
@@ -1081,7 +1079,7 @@ class CaptureService : Service(), OverlayController.Listener {
 
     /** 视频模式下的追问提示：不再重传视频 */
     private fun videoFollowUpPrompt(): String = """
-        你是一位数学网课助教。学生在追问——这一轮不会再重复上传录像，画面和你上一轮看到的是同一段（最近 ${prefs.clipSeconds} 秒网课）。
+        你是一位专业的数学老师助教。学生在追问——这一轮不会再重复上传录像，画面和你上一轮看到的是同一段（最近 ${prefs.clipSeconds} 秒网课）。
 
         请围绕上文继续解释。如果确实需要重新看画面，直接说明需要重新上传，不要凭空猜测板书内容，也不要臆测老师的原话。
 
@@ -1098,7 +1096,7 @@ class CaptureService : Service(), OverlayController.Listener {
                 "这段录像带声音轨，但当前模型无法解析音频，你只能看板书。不要臆测老师说了什么。"
         }
         return """
-            你是一位坐在学生旁边的数学网课助教。学生正在看一节数学网课，卡住了就会截取最近 ${prefs.clipSeconds} 秒的录像来问你（mp4，画面是老师的板书 / 公式推导 / PPT）。你可以从连续画面里看出老师正在写什么、讲到哪一步。
+            你是一位坐在学生旁边的专业的数学老师助教。学生正在看一节数学网课，卡住了就会截取最近 ${prefs.clipSeconds} 秒的录像来问你（mp4，画面是老师的板书 / 公式推导 / PPT）。你可以从连续画面里看出老师正在写什么、讲到哪一步。
 
             $audioHint
 

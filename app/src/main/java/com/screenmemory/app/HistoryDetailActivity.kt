@@ -66,7 +66,7 @@ class HistoryDetailActivity : AppCompatActivity() {
         private const val STREAM_INTERVAL_MS = 120L
 
         private val FOLLOW_UP_PROMPT = """
-            你是一位数学网课助教。学生在回看一段提问记录，并继续追问。
+            你是一位专业的数学老师助教。学生在回看一段提问记录，并继续追问。
 
             注意：这一轮不会附任何截图或视频 —— 网课画面没有被保存下来，你只能依据上文里已经给出的问答来回答。
             如果这个问题必须重新看板书才能回答，直接说明「需要回到悬浮球重新提问并附上画面」，不要凭空猜测画面内容。
@@ -76,7 +76,7 @@ class HistoryDetailActivity : AppCompatActivity() {
         """.trimIndent()
 
         private val IMAGE_FOLLOW_UP_PROMPT = """
-            你是一位数学网课助教。学生在回看一段提问记录，并上传了一张图片继续追问。
+            你是一位专业的数学老师助教。学生在回看一段提问记录，并上传了一张图片继续追问。
 
             请优先依据这张图片回答；如果图片里的内容不足以回答，再结合上文已有问答。
             图片不清晰或关键步骤被截掉时，直接说明需要重新上传更完整的截图，不要凭空猜测。
